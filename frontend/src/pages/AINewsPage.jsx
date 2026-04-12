@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
 import { useSearchParams } from "react-router-dom";
-import { zodResolver } from "@hookform/resolvers/zod";
 
 import PageFrame from "../components/ui/PageFrame";
 import EmptyState from "../components/ui/EmptyState";
@@ -9,10 +7,7 @@ import ErrorBanner from "../components/ui/ErrorBanner";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import SectionHeader from "../components/ui/SectionHeader";
 import StatusBadge from "../components/ui/StatusBadge";
-import SummaryStrip from "../components/ui/SummaryStrip";
-import { analyzeAiNews, fetchAiStatus, getNewsFeed } from "../lib/api";
-import { aiNewsSchema } from "../lib/forms";
-import { t } from "../lib/i18n";
+import { fetchAiStatus, getNewsFeed } from "../lib/api";
 
 
 // ──────────────────────────────────────────────
@@ -120,69 +115,24 @@ function NewsItem({ item }) {
 
 
 // ──────────────────────────────────────────────
-// Manual analysis form helpers
-// ──────────────────────────────────────────────
-function parseItems(text) {
-  return String(text || "")
-    .split("\n")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function listOrFallback(items) {
-  return items?.length ? items : ["None highlighted"];
-}
-
-
-// ──────────────────────────────────────────────
 // Main page
 // ──────────────────────────────────────────────
 export default function AINewsPage() {
-  // Feed state
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [feedData, setFeedData] = useState(null);
   const [feedLoading, setFeedLoading] = useState(true);
   const [feedError, setFeedError] = useState("");
+  const [aiStatus, setAiStatus] = useState(null);
   const refreshTimerRef = useRef(null);
-
-  // Manual analysis state
-  const [showManualForm, setShowManualForm] = useState(false);
-  const [status, setStatus] = useState(null);
-  const [result, setResult] = useState(null);
-  const [loadingStatus, setLoadingStatus] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [searchParams] = useSearchParams();
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-    setValue,
-  } = useForm({
-    resolver: zodResolver(aiNewsSchema),
-    defaultValues: {
-      symbol: "",
-      headline: "",
-      articleText: "",
-      itemsText: "",
-      marketContext: "",
-    },
-  });
 
   // Load AI status once
   useEffect(() => {
-    let active = true;
-    const symbol = searchParams.get("symbol");
-    if (symbol) setValue("symbol", symbol.trim().toUpperCase());
+    fetchAiStatus().then(setAiStatus).catch(() => {});
+  }, []);
 
-    fetchAiStatus()
-      .then((data) => { if (active) setStatus(data); })
-      .catch((e) => { if (active) setError(e.message || "AI status request failed."); })
-      .finally(() => { if (active) setLoadingStatus(false); });
-
-    return () => { active = false; };
-  }, [searchParams, setValue]);
+  // Filter by symbol from URL param
+  const symbolFilter = searchParams.get("symbol") || "";
 
   // Load feed whenever date changes
   useEffect(() => {
@@ -203,7 +153,7 @@ export default function AINewsPage() {
 
     loadFeed();
 
-    // Auto-refresh every 60s (only when viewing today)
+    // Auto-refresh every 60s when viewing today
     if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     if (isToday(selectedDate)) {
       refreshTimerRef.current = setInterval(loadFeed, 60_000);
@@ -215,51 +165,28 @@ export default function AINewsPage() {
     };
   }, [selectedDate]);
 
-  // Date navigation
   function goToPrevDay() { setSelectedDate((d) => prevDay(d)); }
   function goToNextDay() { if (!isFuture(nextDay(selectedDate))) setSelectedDate((d) => nextDay(d)); }
   function goToToday() { setSelectedDate(new Date()); }
 
-  // Manual analysis submit
-  async function onSubmit(values) {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await analyzeAiNews({
-        symbol: String(values.symbol || "").trim().toUpperCase() || null,
-        headline: String(values.headline || "").trim() || null,
-        article_text: String(values.articleText || "").trim() || null,
-        items: parseItems(values.itemsText),
-        market_context: String(values.marketContext || "").trim() || null,
-      });
-      setResult(data);
-    } catch (requestError) {
-      setResult(null);
-      setError(requestError.message || "AI news analysis failed.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const analysisResultTone = !result?.sentiment
-    ? "subtle"
-    : result.sentiment === "BULLISH"
-    ? "accent"
-    : result.sentiment === "BEARISH"
-    ? "warning"
-    : "subtle";
-
   const isNextDisabled = isFuture(nextDay(selectedDate));
+
+  // Optional: filter items by symbol if URL param present
+  const items = feedData?.items
+    ? symbolFilter
+      ? feedData.items.filter((i) => i.instrument?.toUpperCase() === symbolFilter.toUpperCase())
+      : feedData.items
+    : [];
 
   return (
     <PageFrame
-      title="محلل أخبار الذكاء الاصطناعي"
-      description="متابعة أخبار السوق لحظة بلحظة مع التحليل الآلي بالذكاء الاصطناعي المحلي."
+      title="تغذية أخبار السوق"
+      description="آخر الأخبار المُجمَّعة تلقائياً مع التحليل الآلي بالذكاء الاصطناعي المحلي."
       eyebrow="AI Research"
       headerActions={
         <StatusBadge
-          label={status?.effective_status === "ready" ? "AI جاهز" : "AI معطّل"}
-          tone={status?.effective_status === "ready" ? "accent" : "warning"}
+          label={aiStatus?.effective_status === "ready" ? "AI جاهز" : "AI غير متصل"}
+          tone={aiStatus?.effective_status === "ready" ? "accent" : "subtle"}
         />
       }
     >
@@ -308,127 +235,21 @@ export default function AINewsPage() {
 
         {feedLoading && <LoadingSkeleton lines={6} />}
 
-        {!feedLoading && feedError && (
-          <ErrorBanner message={feedError} />
-        )}
+        {!feedLoading && feedError && <ErrorBanner message={feedError} />}
 
-        {!feedLoading && !feedError && feedData && feedData.items.length === 0 && (
+        {!feedLoading && !feedError && items.length === 0 && (
           <EmptyState
             title="لا توجد أخبار لهذا اليوم"
-            description="لم يتم جمع أي أخبار في هذا التاريخ بعد. حاول التنقل إلى يوم آخر أو أضف خبراً يدوياً."
+            description="سيتم جمع الأخبار تلقائياً. حاول التنقل إلى يوم آخر."
           />
         )}
 
-        {!feedLoading && !feedError && feedData && feedData.items.length > 0 && (
+        {!feedLoading && !feedError && items.length > 0 && (
           <div className="news-feed-list">
-            {feedData.items.map((item) => (
+            {items.map((item) => (
               <NewsItem key={item.id} item={item} />
             ))}
           </div>
-        )}
-      </div>
-
-      {/* ── Manual Analysis (Collapsible) ── */}
-      <div className="panel result-panel">
-        <button
-          className="collapsible-header"
-          onClick={() => setShowManualForm((v) => !v)}
-          aria-expanded={showManualForm}
-        >
-          <SectionHeader
-            title="تحليل يدوي"
-            description="أدخل عنواناً أو نص مقال للحصول على تحليل آني بالذكاء الاصطناعي."
-          />
-          <span className="collapsible-icon">{showManualForm ? "▲" : "▼"}</span>
-        </button>
-
-        {showManualForm && (
-          <>
-            <div className="panel result-panel" style={{ marginTop: "1rem" }}>
-              <SectionHeader title="AI Runtime" description="حالة الذكاء الاصطناعي لهذا المثيل." />
-              {loadingStatus ? (
-                <LoadingSkeleton lines={4} />
-              ) : status ? (
-                <SummaryStrip
-                  items={[
-                    { label: "المزوّد", value: status.effective_provider || "-", badge: "Provider" },
-                    { label: "الحالة", value: status.effective_status || "-", badge: "Status" },
-                    { label: "Ollama", value: status.ollama?.status || "-", badge: "Local" },
-                    { label: "النموذج", value: status.ollama?.model || status.openai?.model || "-", badge: "Model" },
-                  ]}
-                />
-              ) : (
-                <EmptyState title={t("AI status unavailable")} description={t("The backend AI status route did not return runtime information.")} />
-              )}
-            </div>
-
-            <form className="analyze-form filter-form" onSubmit={handleSubmit(onSubmit)} style={{ marginTop: "1rem" }}>
-              <div className="form-grid">
-                <label className="field">
-                  <span>{t("Symbol")}</span>
-                  <input {...register("symbol")} placeholder="AAPL" />
-                </label>
-
-                <label className="field field-span-2">
-                  <span>العنوان</span>
-                  <input {...register("headline")} placeholder="أعلنت Nvidia عن شراكة جديدة في البنية التحتية للذكاء الاصطناعي..." />
-                  {errors.headline ? <small className="field-error">{errors.headline.message}</small> : null}
-                </label>
-
-                <label className="field field-span-2">
-                  <span>نص المقال</span>
-                  <textarea className="field-textarea" {...register("articleText")} placeholder="ألصق نص المقال الكامل هنا..." />
-                </label>
-
-                <label className="field field-span-2">
-                  <span>عناصر الأخبار</span>
-                  <textarea className="field-textarea" {...register("itemsText")} placeholder={"خبر واحد في كل سطر\nرفع التوجيهات المستقبلية\nتوقيع عقد جديد لمراكز البيانات"} />
-                </label>
-
-                <label className="field">
-                  <span>سياق السوق</span>
-                  <textarea className="field-textarea" {...register("marketContext")} placeholder="سياق اختياري مثل دوران القطاعات أو الخلفية الاقتصادية أو مقارنة المؤشر." />
-                </label>
-              </div>
-
-              <div className="form-actions">
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={loading || !(status?.effective_status === "ready")}
-                >
-                  {loading ? "جارٍ التحليل..." : "تحليل الخبر"}
-                </button>
-              </div>
-
-              <ErrorBanner message={error} />
-
-              {!loadingStatus && status && status.effective_status !== "ready" ? (
-                <div className="status-message warning">{status.detail}</div>
-              ) : null}
-            </form>
-
-            {result && (
-              <div className="panel result-panel" style={{ marginTop: "1rem" }}>
-                <SectionHeader
-                  title="Structured Analysis"
-                  description="Strict JSON output rendered into concise trading-style decision support."
-                  badge={result?.impact_horizon || "Analysis"}
-                />
-                {loading ? <LoadingSkeleton lines={8} /> : null}
-                <SummaryStrip
-                  items={[
-                    { label: "Sentiment", value: <StatusBadge label={result.sentiment} tone={analysisResultTone} />, badge: "AI" },
-                    { label: "Confidence", value: `${Number(result.confidence || 0).toFixed(0)}%`, badge: "Score" },
-                    { label: "Horizon", value: result.impact_horizon, badge: "Timing" },
-                    { label: "Tickers", value: result.affected_tickers?.join(", ") || "-", badge: "Scope" },
-                  ]}
-                />
-                <p style={{ margin: "0.75rem 0" }}>{result.summary}</p>
-                <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem" }}>{result.analyst_note}</p>
-              </div>
-            )}
-          </>
         )}
       </div>
     </PageFrame>
