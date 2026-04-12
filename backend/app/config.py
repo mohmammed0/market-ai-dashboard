@@ -64,9 +64,11 @@ AUTH_ALGORITHM = "HS256"
 AUTH_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("MARKET_AI_AUTH_TOKEN_EXPIRE_MINUTES", "1440"))
 AUTH_DEFAULT_USERNAME = os.getenv("MARKET_AI_AUTH_DEFAULT_USERNAME", "admin").strip()
 AUTH_DEFAULT_PASSWORD = os.getenv("MARKET_AI_AUTH_DEFAULT_PASSWORD", "").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-OPENAI_ENABLED = os.getenv("OPENAI_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+# OpenAI permanently removed — these vars are kept only for backward compatibility
+# with code that reads them; OPENAI_ENABLED is hardcoded to False.
+OPENAI_API_KEY = ""  # removed
+OPENAI_MODEL = "none"  # removed
+OPENAI_ENABLED = False  # permanently disabled
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
 # --- Ollama (local LLM) ---
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")

@@ -143,7 +143,7 @@ class AIBiasOverlay(BaseModel):
     contradictions: list[str] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
     news_summary: str | None = None
-    source: Literal["deterministic", "openai", "fallback"] = "deterministic"
+    source: Literal["deterministic", "ollama", "openai", "fallback"] = "deterministic"  # openai kept for backward compat with stored data
     model_used: str | None = None
     generated_at: str | None = None
 

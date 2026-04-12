@@ -1,12 +1,11 @@
-"""LLM Gateway — unified interface for AI providers (Ollama / OpenAI).
+"""LLM Gateway — unified interface for local AI providers (Ollama).
 
-All AI consumers (ai_overlay, ai_news_analyst, etc.) should use this
-gateway instead of importing openai_client or ollama_client directly.
+OpenAI has been permanently removed. All AI inference now routes through
+the local Ollama inference system.
 
-Provider selection:
-  - AI_PROVIDER="ollama"  → Ollama only
-  - AI_PROVIDER="openai"  → OpenAI only
-  - AI_PROVIDER="auto"    → Try Ollama first, fall back to OpenAI
+Provider selection (AI_PROVIDER env var):
+  - "ollama"  → Ollama (default)
+  - "auto"    → Ollama only (OpenAI fallback removed)
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ class LLMUnavailableError(RuntimeError):
 
 
 def get_llm_status() -> dict:
-    """Return combined status of all configured AI providers."""
+    """Return status of the configured local AI provider (Ollama)."""
     result: dict[str, Any] = {"active_provider": AI_PROVIDER}
 
     try:
@@ -34,32 +33,22 @@ def get_llm_status() -> dict:
     except Exception as exc:
         result["ollama"] = {"status": "error", "detail": str(exc)[:200]}
 
-    try:
-        from backend.app.services.openai_client import get_openai_runtime_status
-        result["openai"] = get_openai_runtime_status()
-    except Exception as exc:
-        result["openai"] = {"status": "error", "detail": str(exc)[:200]}
+    # OpenAI permanently removed — always report standby
+    result["openai"] = {
+        "status": "standby",
+        "detail": "OpenAI integration has been permanently removed.",
+        "enabled": False,
+    }
 
-    # Determine effective status
+    # Effective status driven entirely by Ollama
     ollama_ready = result.get("ollama", {}).get("status") == "ready"
-    openai_ready = result.get("openai", {}).get("status") == "ready"
 
-    if AI_PROVIDER == "ollama":
-        result["effective_status"] = "ready" if ollama_ready else "unavailable"
+    if ollama_ready:
+        result["effective_status"] = "ready"
         result["effective_provider"] = "ollama"
-    elif AI_PROVIDER == "openai":
-        result["effective_status"] = "ready" if openai_ready else "unavailable"
-        result["effective_provider"] = "openai"
-    else:  # auto
-        if ollama_ready:
-            result["effective_status"] = "ready"
-            result["effective_provider"] = "ollama"
-        elif openai_ready:
-            result["effective_status"] = "ready"
-            result["effective_provider"] = "openai"
-        else:
-            result["effective_status"] = "unavailable"
-            result["effective_provider"] = None
+    else:
+        result["effective_status"] = "unavailable"
+        result["effective_provider"] = None
 
     return result
 
@@ -72,18 +61,13 @@ def llm_chat(
     timeout: float | None = None,
     force_provider: str | None = None,
 ) -> dict[str, Any]:
-    """Send a chat completion. Returns dict with 'content', 'provider', 'model', 'latency_seconds'."""
+    """Send a chat completion to the local model (Ollama).
 
-    provider = force_provider or AI_PROVIDER
-
-    if provider == "ollama":
-        return _call_ollama(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
-    elif provider == "openai":
-        return _call_openai(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
-    elif provider == "auto":
-        return _call_auto(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
-    else:
-        raise LLMUnavailableError(f"Unknown AI_PROVIDER: {provider}")
+    Returns dict with keys: content, provider, model, latency_seconds.
+    Raises LLMUnavailableError when Ollama is not reachable.
+    """
+    # Any provider value resolves to Ollama — OpenAI is gone.
+    return _call_ollama(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
 
 
 def _call_ollama(messages, **kwargs) -> dict:
@@ -93,57 +77,3 @@ def _call_ollama(messages, **kwargs) -> dict:
         ollama_chat_completion,
     )
     return ollama_chat_completion(messages, **kwargs)
-
-
-def _call_openai(messages, *, temperature=0.3, max_tokens=1024, timeout=None) -> dict:
-    import time
-    from backend.app.services.openai_client import get_openai_client, get_openai_runtime_status
-
-    status = get_openai_runtime_status()
-    if not status["enabled"]:
-        from backend.app.services.openai_client import OpenAIUnavailableError
-        raise OpenAIUnavailableError(status["detail"])
-
-    client = get_openai_client()
-    started = time.perf_counter()
-    response = client.chat.completions.create(
-        model=status["model"],
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    latency = round(time.perf_counter() - started, 3)
-    content = response.choices[0].message.content if response.choices else ""
-
-    return {
-        "content": content,
-        "model": status["model"],
-        "provider": "openai",
-        "latency_seconds": latency,
-    }
-
-
-def _call_auto(messages, **kwargs) -> dict:
-    """Try Ollama first, fall back to OpenAI."""
-    # Try Ollama
-    try:
-        from backend.app.services.ollama_client import get_ollama_runtime_status
-        ollama_status = get_ollama_runtime_status()
-        if ollama_status.get("status") == "ready":
-            result = _call_ollama(messages, **kwargs)
-            log_event(logger, logging.DEBUG, "llm_gateway.auto.ollama_ok")
-            return result
-    except Exception as exc:
-        log_event(logger, logging.WARNING, "llm_gateway.auto.ollama_failed", error=str(exc)[:200])
-
-    # Fall back to OpenAI
-    try:
-        result = _call_openai(messages, **kwargs)
-        log_event(logger, logging.DEBUG, "llm_gateway.auto.openai_fallback_ok")
-        return result
-    except Exception as exc:
-        log_event(logger, logging.WARNING, "llm_gateway.auto.openai_failed", error=str(exc)[:200])
-
-    raise LLMUnavailableError(
-        "No AI provider available. Configure Ollama (local) or OpenAI (remote)."
-    )
