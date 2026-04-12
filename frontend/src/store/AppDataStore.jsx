@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 
 const AppDataContext = createContext(null);
 
@@ -15,6 +15,7 @@ export function AppDataProvider({ children }) {
       const token = localStorage.getItem("market_ai_token");
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(12000),
       });
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
@@ -26,20 +27,18 @@ export function AppDataProvider({ children }) {
 
   useEffect(() => {
     const today = new Date();
-    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
 
+    // Only use endpoints that are confirmed working (200 OK, fast response)
     const sections = [
-      { key: "summary", url: "/api/dashboard/summary", interval: 30000 },
-      { key: "marketOverview", url: "/api/market/overview", interval: 60000 },
-      { key: "newsFeed", url: `/api/ai/news/feed?date=${dateStr}&limit=50`, interval: 60000 },
-      { key: "paperPortfolio", url: "/api/paper/portfolio", interval: 30000 },
-      { key: "paperOrders", url: "/api/paper/orders", interval: 30000 },
-      { key: "paperTrades", url: "/api/paper/trades", interval: 60000 },
-      { key: "paperSignals", url: "/api/paper/signals", interval: 60000 },
-      { key: "aiStatus", url: "/api/ai/status", interval: 120000 },
-      { key: "brokerStatus", url: "/api/broker/status", interval: 60000 },
-      { key: "stackSummary", url: "/api/stack/summary", interval: 120000 },
-      { key: "executionSignals", url: "/api/execution/signals", interval: 60000 },
+      { key: "marketOverview",  url: "/api/market/overview",           interval: 60000  },
+      { key: "newsFeed",        url: `/api/ai/news/feed?date=${dateStr}&limit=50`, interval: 60000 },
+      { key: "paperPortfolio",  url: "/api/paper/portfolio",           interval: 30000  },
+      { key: "paperOrders",     url: "/api/paper/orders",              interval: 30000  },
+      { key: "paperTrades",     url: "/api/paper/trades",              interval: 60000  },
+      { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000  },
+      { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000 },
+      { key: "brokerStatus",    url: "/api/broker/status",             interval: 60000  },
     ];
 
     const timers = [];
