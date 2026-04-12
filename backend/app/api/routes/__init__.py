@@ -10,11 +10,15 @@ from .continuous_learning import router as continuous_learning_router
 from .dashboard import router as dashboard_router
 from .execution import router as execution_router
 from .events import router as events_router
+from .fundamentals import router as fundamentals_router
 from .health import router as health_router
 from .intelligence import router as intelligence_router
 from .journal import router as journal_router
 from .jobs import router as jobs_router
 from .live import router as live_router
+from .macro import router as macro_router
+from .position_sizing import router as position_sizing_router
+from .portfolio_risk import router as portfolio_risk_router
 from .market import router as market_router
 from .market_data import router as market_data_router
 from .market_terminal import router as market_terminal_router
@@ -50,6 +54,7 @@ __all__ = [
     "dashboard_router",
     "execution_router",
     "events_router",
+    "fundamentals_router",
     "health_router",
     "intelligence_router",
     "journal_router",
@@ -78,4 +83,7 @@ __all__ = [
     "metrics_router",
     "workspace_router",
     "auth_router",
+    "macro_router",
+    "position_sizing_router",
+    "portfolio_risk_router",
 ]

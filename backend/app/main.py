@@ -47,6 +47,10 @@ from backend.app.api.routes import (
     workspace_router,
     events_router,
     auth_router,
+    macro_router,
+    fundamentals_router,
+    position_sizing_router,
+    portfolio_risk_router,
 )
 from backend.app.config import (
     ALLOWED_ORIGINS,
@@ -263,3 +267,7 @@ app.include_router(training_router, prefix="/api")
 app.include_router(watchlists_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
+app.include_router(macro_router, prefix="/api")
+app.include_router(position_sizing_router, prefix="/api")
+app.include_router(portfolio_risk_router, prefix="/api")
+app.include_router(fundamentals_router, prefix="/api")

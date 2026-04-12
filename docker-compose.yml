@@ -24,6 +24,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       MARKET_AI_ENV: ${MARKET_AI_ENV:-production}
       MARKET_AI_SERVER_ROLE: ${MARKET_AI_SERVER_ROLE_API:-api}
@@ -86,6 +88,9 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2:0.5b}
       MARKET_AI_PROVIDER: ${MARKET_AI_PROVIDER:-ollama}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-600}
+      MARKET_AI_REDIS_URL: redis://redis:6379/0
+      MARKET_AI_REDIS_ENABLED: "1"
+      MARKET_AI_REDIS_CACHE_TTL_DEFAULT: "300"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -169,11 +174,26 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2:0.5b}
       MARKET_AI_PROVIDER: ${MARKET_AI_PROVIDER:-ollama}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-600}
+      MARKET_AI_REDIS_URL: redis://redis:6379/0
+      MARKET_AI_REDIS_ENABLED: "1"
+      MARKET_AI_REDIS_CACHE_TTL_DEFAULT: "300"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
       - ./model_artifacts:/app/model_artifacts
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
 
   frontend:
     build:
@@ -199,4 +219,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
