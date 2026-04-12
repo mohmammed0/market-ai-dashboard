@@ -307,7 +307,7 @@ def get_kpi_dashboard() -> dict[str, Any]:
                 "expectancy": expectancy,
                 "average_holding_time_hours": _holding_time_hours(trades),
                 "regime_performance": [
-                    {"label": "أفضل عائد", "value": latest_leaderboard[0]["strategy"] if latest_leaderboard else "-"},
+                    {"label": "أفضل عائد", "value": latest_leaderboard[0].get("candidate_name", latest_leaderboard[0].get("strategy", "-")) if latest_leaderboard else "-"},
                     {"label": "أفضل متانة", "value": latest_eval.get("best_strategy") if latest_eval else "-"},
                     {"label": "تقييمات محفوظة", "value": strategy_history.get("count", 0)},
                 ],
