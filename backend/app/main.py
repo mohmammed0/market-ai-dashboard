@@ -172,6 +172,14 @@ async def request_observer(request: Request, call_next):
 
 @app.on_event("startup")
 def on_startup():
+    # Sync Alpaca credentials from broker runtime config (DB) → os.environ
+    # so AlpacaMarketDataProvider.configured() returns True when keys were
+    # entered via the Settings UI rather than hard-coded in env vars.
+    try:
+        from backend.app.services.market_data import sync_alpaca_credentials_from_runtime
+        sync_alpaca_credentials_from_runtime()
+    except Exception:
+        pass
     init_db(run_migrations=DATABASE_RUN_MIGRATIONS_ON_STARTUP)
     try:
         initialize_workspace_defaults()
