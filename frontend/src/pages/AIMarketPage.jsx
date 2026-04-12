@@ -16,6 +16,7 @@ import {
 import {
   fetchMacroCalendar,
   fetchRankingLeaders,
+  fetchSymbolSignal,
   fetchFundamentals,
   fetchMarketHistory,
   fetchQuoteSnapshot,
@@ -92,9 +93,9 @@ function regimeColor(regime) {
 function regimeLabel(regime) {
   if (!regime) return "—";
   const r = String(regime).toLowerCase();
-  if (r.includes("risk_on")) return "مخاطرة مرتفعة";
-  if (r.includes("risk_off")) return "مخاطرة منخفضة";
-  return "محايد";
+  if (r.includes("risk_on")) return "توسعي 🟢";
+  if (r.includes("risk_off")) return "انكماشي 🔴";
+  return "محايد 🟡";
 }
 
 // ---------------------------------------------------------------------------
@@ -891,7 +892,7 @@ export default function AIMarketPage() {
     setSignalLoading(true);
     setSignalError(null);
     try {
-      const data = await fetchRankingLeaders(50);
+      const data = await fetchSymbolSignal(sym);
       setSignalData(data);
     } catch (err) {
       setSignalError(err.message || "تعذر تحميل الإشارة");
