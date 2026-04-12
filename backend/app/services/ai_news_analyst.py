@@ -99,17 +99,18 @@ def analyze_news(payload: AINewsAnalyzeRequest) -> dict:
 
     # Add JSON schema instruction to user prompt for non-structured providers
     json_instruction = """
-Respond ONLY with valid JSON matching this exact schema:
+Respond ONLY with valid JSON matching this exact schema (no extra fields):
 {
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": <0-100>,
-  "impact_level": "HIGH" | "MEDIUM" | "LOW",
+  "sentiment": "BULLISH" or "BEARISH" or "NEUTRAL",
+  "confidence": <integer 0-100>,
+  "impact_horizon": "INTRADAY" or "SHORT_TERM" or "MEDIUM_TERM" or "LONG_TERM",
   "summary": "<1-2 sentence summary>",
-  "bullish_factors": ["<factor1>", ...],
-  "bearish_factors": ["<factor1>", ...],
-  "risks": ["<risk1>", ...],
-  "catalysts": ["<catalyst1>", ...],
-  "affected_tickers": ["<TICKER1>", ...]
+  "bullish_factors": ["<factor>"],
+  "bearish_factors": ["<factor>"],
+  "risks": ["<risk>"],
+  "catalysts": ["<catalyst>"],
+  "affected_tickers": ["<TICKER>"],
+  "analyst_note": "<brief analyst commentary on confidence and uncertainty>"
 }
 """
 
