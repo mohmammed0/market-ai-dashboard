@@ -15,13 +15,12 @@ import useDecisionSurface from "../hooks/useDecisionSurface";
 import useJobRunner from "../hooks/useJobRunner";
 import {
   fetchAlertHistory,
-  fetchDashboardSummary,
   fetchLiveSnapshots,
   runBatchInference,
 } from "../lib/api";
 import { getJson, postJson } from "../api/client";
 import { useSymbolLibrary } from "../lib/useSymbolLibrary";
-import { t } from "../lib/i18n";
+import { useAppData } from "../store/AppDataStore";
 
 
 function statusTone(runtimeStatus) {
@@ -34,11 +33,12 @@ function statusTone(runtimeStatus) {
 
 export default function DashboardPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
-  const [summary, setSummary] = useState(null);
+
+  // Use pre-fetched summary from global store
+  const { data: summary, loading, error } = useAppData("summary");
+
   const [alerts, setAlerts] = useState([]);
   const [workspaceQuotes, setWorkspaceQuotes] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [focusSymbol, setFocusSymbol] = useState("");
   const [batchResult, setBatchResult] = useState(null);
   const [smartAlerts, setSmartAlerts] = useState([]);
@@ -57,18 +57,15 @@ export default function DashboardPage() {
     enabled: Boolean(focusSymbol),
   });
 
-  // Load dashboard data
+  // Load alerts and smart alerts
   useEffect(() => {
     let active = true;
-    fetchDashboardSummary()
-      .then((data) => { if (active) setSummary(data); })
-      .catch((e) => { if (active) setError(e.message || "Dashboard failed"); })
-      .finally(() => { if (active) setLoading(false); });
-
     fetchAlertHistory()
       .then((data) => { if (active) setAlerts((data?.items || []).slice(0, 5)); })
       .catch(() => {});
-
+    getJson("/api/smart/alerts")
+      .then((data) => { if (active) setSmartAlerts((data?.alerts || []).slice(0, 5)); })
+      .catch(() => {});
     return () => { active = false; };
   }, []);
 
@@ -82,15 +79,6 @@ export default function DashboardPage() {
       .catch(() => { if (active) setWorkspaceQuotes([]); });
     return () => { active = false; };
   }, [pinned, recent]);
-
-  // Load smart alerts
-  useEffect(() => {
-    let active = true;
-    getJson("/api/smart/alerts")
-      .then((data) => { if (active) setSmartAlerts((data?.alerts || []).slice(0, 5)); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
 
   // Auto-select focus symbol
   useEffect(() => {
@@ -324,7 +312,7 @@ export default function DashboardPage() {
         <SectionCard
           className="col-span-5"
           title="الأتمتة الذكية"
-          description="تنبيهات ذكية من المحرك التلقائي — فرص مكتشفة بالذكاء الاصطناعي."
+          description="تنبيهات ذكية من المحرك التلقائي."
           action={
             <button
               className="btn btn-primary btn-sm"
