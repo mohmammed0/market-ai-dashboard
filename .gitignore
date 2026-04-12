@@ -89,3 +89,8 @@ technical_engine.py.bak_talib_core
 technical_engine.py.bak_tools_pack1
 technical_engine.py.bak_tools_pack2
 MarketAIDashboard.spec
+
+.claude/worktrees/
+.env
+frontend/test-results/
+*.docx

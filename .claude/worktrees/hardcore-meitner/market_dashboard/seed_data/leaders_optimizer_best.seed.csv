@@ -1,5 +1,0 @@
-instrument,hold_days,min_technical_score,buy_score_threshold,sell_score_threshold,trades,overall_win_rate_pct,buy_win_rate_pct,sell_win_rate_pct,avg_trade_return_pct,median_trade_return_pct,best_trade_pct,worst_trade_pct,avg_technical_score,avg_mtf_score,avg_rs_score,avg_trend_quality_score,stability_score,rank_in_symbol
-AAPL,10,2,3,5,162,56.7901,57.1429,54.5455,0.8388,0.6607,13.694,-9.9044,2.1728,0.1358,0.3457,1.7099,70.0381,1
-SPY,10,2,4,4,70,60.0,57.4074,68.75,0.2507,0.5275,5.5394,-9.6579,1.9286,0.3,0.0,0.8143,64.607,1
-NVDA,10,2,3,5,186,48.3871,54.4872,16.6667,0.0539,-0.7632,28.3627,-29.4176,1.7796,0.2204,0.4516,1.4462,54.5061,1
-MSFT,5,2,3,4,156,47.4359,49.2537,46.0674,0.0423,-0.1753,9.9749,-8.9218,-0.7821,-0.0385,-0.2436,-0.2308,52.5389,1
