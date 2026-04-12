@@ -256,7 +256,7 @@ export default function KPIDashboardPage() {
                 { label: "الأسهم الصاعدة", value: payload.market_intelligence?.breadth?.advancing ?? 0 },
                 { label: "الأسهم الهابطة", value: payload.market_intelligence?.breadth?.declining ?? 0 },
                 { label: "نسبة الاتساع", value: payload.market_intelligence?.breadth?.breadth_ratio ?? 0 },
-                { label: "OpenAI", value: payload.market_intelligence?.news_sentiment_summary?.openai_enabled ? "جاهز" : "غير جاهز" },
+                { label: "نموذج محلي", value: payload.market_intelligence?.news_sentiment_summary?.ai_enabled ? "جاهز" : "غير جاهز" },
               ]}
             />
             <div className="result-grid premium-kpi-grid">

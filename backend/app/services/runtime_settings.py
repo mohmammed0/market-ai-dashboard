@@ -263,40 +263,21 @@ def _sdk_installed(package: str) -> bool:
 
 
 def _build_openai_payload(records: dict[str, dict[str, Any]] | None = None, *, include_secrets: bool = False) -> dict:
-    enabled, enabled_source = _resolve_setting("openai.enabled", records)
-    api_key, api_key_source = _resolve_setting("openai.api_key", records)
-    model, model_source = _resolve_setting("openai.model", records)
-    sdk_installed = _sdk_installed("openai")
-    configured = bool(api_key)
-    runtime_enabled = bool(enabled and configured and sdk_installed)
-
-    if not enabled:
-        detail = "OpenAI integration is disabled."
-        status = "standby"
-    elif not sdk_installed:
-        detail = "openai package is not installed in the backend environment."
-        status = "error"
-    elif not configured:
-        detail = "OpenAI API key is not configured."
-        status = "warning"
-    else:
-        detail = "OpenAI integration is ready."
-        status = "ready"
-
+    # OpenAI permanently removed — always returns standby/disabled.
     return {
-        "enabled": bool(enabled),
-        "enabled_source": enabled_source,
-        "configured": configured,
-        "api_key": _coerce_text(api_key, default="") if include_secrets else None,
-        "api_key_masked": _secret_mask(api_key),
-        "api_key_source": api_key_source,
-        "model": _coerce_text(model, default="gpt-5.4-mini"),
-        "model_source": model_source,
-        "sdk_installed": sdk_installed,
-        "status": status,
-        "runtime_enabled": runtime_enabled,
+        "enabled": False,
+        "enabled_source": "hardcoded",
+        "configured": False,
+        "api_key": None,
+        "api_key_masked": "",
+        "api_key_source": "hardcoded",
+        "model": "none",
+        "model_source": "hardcoded",
+        "sdk_installed": False,
+        "status": "standby",
+        "runtime_enabled": False,
         "timeout_seconds": OPENAI_TIMEOUT_SECONDS,
-        "detail": detail,
+        "detail": "OpenAI integration has been permanently removed. Use local model (Ollama).",
     }
 
 
@@ -458,17 +439,9 @@ def invalidate_runtime_caches() -> None:
 
 
 def save_openai_runtime_settings(*, enabled: bool, model: str, api_key: str | None = None, clear_api_key: bool = False) -> dict:
-    clean_model = _coerce_text(model, default="gpt-5.4-mini") or "gpt-5.4-mini"
-    with session_scope() as session:
-        _upsert_setting(session, "openai.enabled", enabled)
-        _upsert_setting(session, "openai.model", clean_model)
-        if clear_api_key:
-            _delete_setting(session, "openai.api_key")
-        elif api_key is not None and str(api_key).strip():
-            _upsert_setting(session, "openai.api_key", str(api_key).strip(), secret=True)
-    overview = get_runtime_settings_overview()["openai"]
-    log_event(logger, logging.INFO, "runtime_settings.openai.saved", enabled=overview.get("enabled"), model=overview.get("model"), api_key_updated=bool(api_key), api_key_cleared=bool(clear_api_key))
-    return overview
+    # OpenAI permanently removed — settings cannot be changed.
+    log_event(logger, logging.WARNING, "runtime_settings.openai.saved", enabled=False, reason="permanently_removed")
+    return _build_openai_payload()
 
 
 def save_alpaca_runtime_settings(
@@ -519,39 +492,10 @@ def save_alpaca_runtime_settings(
 
 
 def test_openai_runtime_settings() -> dict:
-    payload = get_openai_runtime_config()
-    if not payload["enabled"]:
-        result = {"ok": False, "detail": "OpenAI integration is disabled.", "model": payload["model"]}
-        log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="disabled", model=payload["model"])
-        return result
-    if not payload["configured"]:
-        result = {"ok": False, "detail": "OpenAI API key is not configured.", "model": payload["model"]}
-        log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="missing_key", model=payload["model"])
-        return result
-    if not _sdk_installed("openai"):
-        result = {"ok": False, "detail": "openai package is not installed.", "model": payload["model"]}
-        log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="sdk_missing", model=payload["model"])
-        return result
-
-    try:
-        from openai import OpenAI
-    except Exception:
-        result = {"ok": False, "detail": "openai package is not installed.", "model": payload["model"]}
-        log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="sdk_missing", model=payload["model"])
-        return result
-
-    client = OpenAI(api_key=payload["api_key"], timeout=OPENAI_TIMEOUT_SECONDS, max_retries=1)
-    try:
-        response = client.models.retrieve(payload["model"])
-        model_id = getattr(response, "id", None) or payload["model"]
-        result = {"ok": True, "detail": f"OpenAI connection verified for model {model_id}.", "model": model_id}
-        log_event(logger, logging.INFO, "runtime_settings.openai.test", ok=True, model=model_id)
-        return result
-    except Exception as exc:  # pragma: no cover - external service
-        detail = _redact_text(str(exc) or "OpenAI connection test failed.", [payload["api_key"]])
-        result = {"ok": False, "detail": detail, "model": payload["model"]}
-        log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="connection_failed", model=payload["model"], detail=detail)
-        return result
+    # OpenAI permanently removed — always returns disabled.
+    result = {"ok": False, "detail": "OpenAI integration has been permanently removed. Use local model (Ollama).", "model": "none"}
+    log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="permanently_removed")
+    return result
 
 
 def test_alpaca_runtime_settings() -> dict:
