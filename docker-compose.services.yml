@@ -1,0 +1,52 @@
+# Local live services for development proving.
+# Usage: docker compose -f docker-compose.services.yml up -d
+#
+# This brings up PostgreSQL, Redis, and MLflow for local live-stack testing.
+# The app itself is NOT containerized here — run it from the venv as usual.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: market_ai_postgres
+    environment:
+      POSTGRES_DB: market_ai
+      POSTGRES_USER: market_ai
+      POSTGRES_PASSWORD: market_ai_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U market_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: market_ai_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.21.3
+    container_name: market_ai_mlflow
+    ports:
+      - "5000:5000"
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  mlflow_data:

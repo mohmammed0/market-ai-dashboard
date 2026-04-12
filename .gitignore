@@ -1,0 +1,91 @@
+﻿# Python
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Dependencies (never track installed packages)
+node_modules/
+
+# Build / package
+build/
+dist/
+
+# Logs / temp
+logs/
+*.log
+runtime_cache/
+backups/
+tmp_*/
+
+# Local DB / generated data
+*.db
+*.sqlite
+data/*
+!data/.gitkeep
+market_data.csv
+ml_training_data.csv
+leaders_optimizer_all.csv
+optimizer_results_*.csv
+
+# Model artifacts
+model_artifacts/
+
+# Jupyter
+*.ipynb
+
+# Backups / temp patches
+*.bak
+*.tmp
+_patch_*.py
+patch_*.py
+_test_*.py
+create_*.py
+_replace_*.py
+_download_*.py
+_fix_*.py
+_diag_*.py
+
+# Large local data folders
+us_full_source/
+us_test_normalized/
+us_test_qlib/
+us_test_source/
+us_watchlist_normalized/
+us_watchlist_qlib/
+us_watchlist_source/
+_qlib_repo/
+us_watchlist_source.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+# Extra local-only files
+*.spec
+*.bat
+
+# Extra backups still showing
+*.bak_*
+*.pre_*
+*.before_*
+
+# Specific local files still untracked
+leaders_optimizer_best.csv
+refresh_watchlist_qlib.py
+run_dashboard.bat
+refresh_data.bat
+analysis_engine.py.bak_mtf
+analysis_engine.py.bak_stage_next
+analysis_engine.py.bak_tools_pack1
+analysis_engine.py.bak_tools_pack2
+backtest_engine.py.bak_enhanced
+backtest_engine.py.bak_enhanced_filters
+main_ui.py.bak_stage_next
+main_ui.py.bak_tools_pack1
+main_ui.py.bak_tools_pack2
+technical_engine.py.bak_stage_next
+technical_engine.py.bak_talib_candles
+technical_engine.py.bak_talib_core
+technical_engine.py.bak_tools_pack1
+technical_engine.py.bak_tools_pack2
+MarketAIDashboard.spec
