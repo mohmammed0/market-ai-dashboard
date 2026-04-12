@@ -12,6 +12,13 @@ from backend.app.services.scheduler_runtime import start_scheduler
 def main() -> int:
     configure_logging(LOG_LEVEL)
     init_db(run_migrations=False)
+    # Sync Alpaca market-data credentials from DB → os.environ
+    # so the scheduler's quote-snapshot jobs use Alpaca instead of yfinance.
+    try:
+        from backend.app.services.market_data import sync_alpaca_credentials_from_runtime
+        sync_alpaca_credentials_from_runtime()
+    except Exception:
+        pass
     scheduler_status = start_scheduler()
     learning_status = {"enabled": False, "accepted": False, "state": {}}
     if not scheduler_status.get("running"):
