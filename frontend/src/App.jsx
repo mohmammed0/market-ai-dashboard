@@ -30,6 +30,10 @@ const OperationsPage = lazy(() => import("./pages/OperationsPage"));
 const PortfolioExposurePage = lazy(() => import("./pages/PortfolioExposurePage"));
 const ScanPage = lazy(() => import("./pages/ScanPage"));
 
+const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
+const MacroDashboardPage = lazy(() => import("./pages/MacroDashboardPage"));
+const FundamentalsPage = lazy(() => import("./pages/FundamentalsPage"));
+
 function PageSkeleton() {
   return (
     <div style={{ padding: 16 }}>
@@ -87,6 +91,9 @@ export default function App() {
                           <Route path="/operations" element={<OperationsPage />} />
                           <Route path="/portfolio-exposure" element={<PortfolioExposurePage />} />
                           <Route path="/scan" element={<ScanPage />} />
+                          <Route path="/ai-market" element={<AIMarketPage />} />
+                          <Route path="/macro" element={<MacroDashboardPage />} />
+                          <Route path="/fundamentals" element={<FundamentalsPage />} />
                         </Routes>
                       </Suspense>
                     </ErrorBoundary>

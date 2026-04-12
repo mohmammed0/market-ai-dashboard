@@ -39,6 +39,7 @@ export function AppDataProvider({ children }) {
       { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000  },
       { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000 },
       { key: "brokerStatus",    url: "/api/broker/status",             interval: 60000  },
+      { key: "macroCal",        url: "/api/macro/calendar",            interval: 3600000 },
     ];
 
     const timers = [];
