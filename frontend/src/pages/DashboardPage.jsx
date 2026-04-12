@@ -1,402 +1,120 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useAppData } from "../store/AppDataStore";
 
-import DecisionPanel from "../components/ui/DecisionPanel";
-import PageFrame from "../components/ui/PageFrame";
-import ErrorBanner from "../components/ui/ErrorBanner";
-import LoadingSkeleton from "../components/ui/LoadingSkeleton";
-import MetricCard from "../components/ui/MetricCard";
-import SectionCard from "../components/ui/SectionCard";
-import TradingChart from "../components/ui/TradingChart";
-import StatusBadge from "../components/ui/StatusBadge";
-import SummaryStrip from "../components/ui/SummaryStrip";
-import SignalBadge from "../components/ui/SignalBadge";
-import useDecisionSurface from "../hooks/useDecisionSurface";
-import useJobRunner from "../hooks/useJobRunner";
-import {
-  fetchAlertHistory,
-  fetchDashboardSummary,
-  fetchLiveSnapshots,
-  runBatchInference,
-} from "../lib/api";
-import { getJson, postJson } from "../api/client";
-import { useSymbolLibrary } from "../lib/useSymbolLibrary";
-import { t } from "../lib/i18n";
+function pct(v) { const n = Number(v ?? 0); return (n >= 0 ? "+" : "") + n.toFixed(2) + "%"; }
+function money(v) { return Number(v ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-
-function statusTone(runtimeStatus) {
-  const normalized = String(runtimeStatus || "").toLowerCase();
-  if (normalized === "running") return "positive";
-  if (normalized === "error" || normalized === "failed") return "negative";
-  return "neutral";
+function StatCard({ label, value, sub, subTone }) {
+  const subColor = subTone === "pos" ? "var(--tv-positive)" : subTone === "neg" ? "var(--tv-negative)" : "var(--tv-text-muted)";
+  return (
+    <div className="tv-card" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span style={{ fontSize: 11, color: "var(--tv-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
+      <span style={{ fontSize: 22, fontWeight: 700, color: "var(--tv-text)", fontVariantNumeric: "tabular-nums" }}>{value}</span>
+      {sub && <span style={{ fontSize: 12, color: subColor }}>{sub}</span>}
+    </div>
+  );
 }
 
+function IndexRow({ item }) {
+  const chg = Number(item.change_pct ?? 0);
+  return (
+    <tr>
+      <td style={{ color: "var(--tv-text)", fontWeight: 600 }}>{item.symbol}</td>
+      <td style={{ color: "var(--tv-text)", fontVariantNumeric: "tabular-nums" }}>{Number(item.price ?? 0).toFixed(2)}</td>
+      <td style={{ color: chg >= 0 ? "var(--tv-positive)" : "var(--tv-negative)", fontVariantNumeric: "tabular-nums" }}>{pct(chg)}</td>
+    </tr>
+  );
+}
+
+function NewsRow({ item }) {
+  const s = String(item.sentiment || "").toLowerCase();
+  const dot = (s === "bullish" || s === "positive") ? "#089981" : (s === "bearish" || s === "negative") ? "#f23645" : "#555a6b";
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid var(--tv-border)" }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0, marginTop: 5 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--tv-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none" }}>{item.title}</a> : item.title}
+        </p>
+        <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--tv-text-muted)" }}>{item.instrument} · {item.source}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const [summary, setSummary] = useState(null);
-  const [alerts, setAlerts] = useState([]);
-  const [workspaceQuotes, setWorkspaceQuotes] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [focusSymbol, setFocusSymbol] = useState("");
-  const [batchResult, setBatchResult] = useState(null);
-  const [smartAlerts, setSmartAlerts] = useState([]);
-  const [smartLoading, setSmartLoading] = useState(false);
-  const { pinned, recent } = useSymbolLibrary();
-  const batchJob = useJobRunner("intelligence_infer_batch", { recentLimit: 6 });
+  const { data: market, loading: mktLoading } = useAppData("marketOverview");
+  const { data: portfolio }                   = useAppData("paperPortfolio");
+  const { data: broker }                      = useAppData("brokerStatus");
+  const { data: ai }                          = useAppData("aiStatus");
+  const { data: news }                        = useAppData("newsFeed");
+  const { data: signals }                     = useAppData("paperSignals");
 
-  const {
-    decision,
-    loading: decisionLoading,
-    error: decisionError,
-  } = useDecisionSurface({
-    symbol: focusSymbol,
-    startDate: "2024-01-01",
-    endDate: todayIso,
-    enabled: Boolean(focusSymbol),
-  });
-
-  // Load dashboard data
-  useEffect(() => {
-    let active = true;
-    fetchDashboardSummary()
-      .then((data) => { if (active) setSummary(data); })
-      .catch((e) => { if (active) setError(e.message || "Dashboard failed"); })
-      .finally(() => { if (active) setLoading(false); });
-
-    fetchAlertHistory()
-      .then((data) => { if (active) setAlerts((data?.items || []).slice(0, 5)); })
-      .catch(() => {});
-
-    return () => { active = false; };
-  }, []);
-
-  // Load workspace quotes
-  useEffect(() => {
-    const symbols = [...pinned, ...recent].map((s) => s.symbol).filter(Boolean).slice(0, 8);
-    if (!symbols.length) { setWorkspaceQuotes([]); return; }
-    let active = true;
-    fetchLiveSnapshots({ symbols })
-      .then((p) => { if (active) setWorkspaceQuotes(p?.items || []); })
-      .catch(() => { if (active) setWorkspaceQuotes([]); });
-    return () => { active = false; };
-  }, [pinned, recent]);
-
-  // Load smart alerts
-  useEffect(() => {
-    let active = true;
-    getJson("/api/smart/alerts")
-      .then((data) => { if (active) setSmartAlerts((data?.alerts || []).slice(0, 5)); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
-
-  // Auto-select focus symbol
-  useEffect(() => {
-    if (focusSymbol) return;
-    const derived = [
-      ...workspaceQuotes.map((q) => q.symbol),
-      ...pinned.map((s) => s.symbol),
-      ...recent.map((s) => s.symbol),
-      summary?.sample_analyze?.instrument,
-      summary?.scan_ranking?.top_pick,
-    ].find(Boolean);
-    if (derived) setFocusSymbol(String(derived).trim().toUpperCase());
-  }, [focusSymbol, workspaceQuotes, pinned, recent, summary]);
-
-  // Batch results
-  useEffect(() => {
-    if (batchJob.currentJob?.status === "completed" && batchJob.currentJob?.result) {
-      setBatchResult(batchJob.currentJob.result);
-    }
-  }, [batchJob.currentJob]);
-
-  const opportunities = useMemo(() => (summary?.watchlists?.momentum_leaders || []).slice(0, 5), [summary]);
-  const learningState = summary?.continuous_learning?.state || {};
-  const marketProvider = summary?.market_data_status?.primary_provider || "-";
-  const bestCandidate = learningState?.latest_metrics?.best_candidate?.candidate_name || learningState?.best_strategy_name || "-";
-  const workspaceSymbols = useMemo(() => {
-    const candidates = [focusSymbol, ...workspaceQuotes.map((q) => q.symbol), ...pinned.map((s) => s.symbol), ...recent.map((s) => s.symbol)].filter(Boolean);
-    return [...new Set(candidates.map((s) => String(s).trim().toUpperCase()))].slice(0, 8);
-  }, [focusSymbol, workspaceQuotes, pinned, recent]);
-
-  async function handleBatch() {
-    setBatchResult(null);
-    await batchJob.submit(() => runBatchInference({
-      symbols: workspaceSymbols.length ? workspaceSymbols : ["AAPL", "MSFT", "NVDA", "SPY"],
-      start_date: "2024-01-01",
-      end_date: todayIso,
-      include_dl: true,
-      include_ensemble: true,
-    }));
-  }
-
-  async function handleSmartCycle() {
-    setSmartLoading(true);
-    try {
-      await postJson("/api/smart/cycle", {});
-      const data = await getJson("/api/smart/alerts");
-      setSmartAlerts((data?.alerts || []).slice(0, 5));
-    } catch {} finally { setSmartLoading(false); }
-  }
-
-  const chartSummaryItems = [
-    { label: "الرمز", value: focusSymbol || "-", badge: "Focus" },
-    { label: "الموقف", value: decision?.stance || summary?.sample_analyze?.signal || "-", tone: decision?.stance === "BUY" ? "positive" : decision?.stance === "SELL" ? "negative" : "warning" },
-    { label: "الثقة", value: decision?.confidence ?? "-", badge: "%" },
-    { label: "أفضل إعداد", value: decision?.best_setup || "-" },
-  ];
+  const indices    = market?.indices ?? [];
+  const newsItems  = (news?.items ?? []).slice(0, 8);
+  const pnl        = portfolio?.summary?.total_unrealized_pnl ?? 0;
+  const mv         = portfolio?.summary?.total_market_value   ?? 0;
+  const positions  = portfolio?.summary?.open_positions       ?? 0;
+  const signalList = (signals?.items ?? signals ?? []).slice(0, 5);
 
   return (
-    <PageFrame
-      title="مركز القيادة"
-      description="نظرة تشغيلية شاملة: السوق، القرار، المخاطر، والتنفيذ."
-      eyebrow="لوحة التداول"
-      headerActions={
-        <>
-          <Link className="btn btn-secondary btn-sm" to={`/live-market?symbol=${encodeURIComponent(focusSymbol || "AAPL")}`}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-            السوق
-          </Link>
-          <Link className="btn btn-secondary btn-sm" to={`/paper-trading?symbol=${encodeURIComponent(focusSymbol || "AAPL")}`}>
-            التداول
-          </Link>
-          <StatusBadge label={marketProvider !== "-" ? `${marketProvider}` : "بيانات"} tone="positive" />
-        </>
-      }
-    >
-      <ErrorBanner message={error} />
+    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 20 }}>
 
-      {/* KPI Strip */}
-      {loading ? <LoadingSkeleton lines={2} /> : summary && (
-        <SummaryStrip
-          items={[
-            { label: "Top Pick", value: summary.scan_ranking?.top_pick || "-", tone: "info" },
-            { label: "اتساع السوق", value: summary.breadth?.breadth_ratio ?? "-" },
-            { label: "مزود البيانات", value: marketProvider },
-            { label: "المراكز المفتوحة", value: summary.portfolio?.summary?.open_positions ?? 0 },
-            { label: "مرحلة التعلم", value: learningState.active_stage || "idle" },
-            { label: "أفضل مرشح", value: bestCandidate },
-          ]}
-        />
+      <div className="tv-card-grid">
+        <StatCard label="المراكز المفتوحة" value={positions}       sub={positions === 0 ? "لا مراكز نشطة" : positions + " مركز"} subTone="neutral" />
+        <StatCard label="القيمة السوقية"  value={"$" + money(mv)} sub={mv === 0 ? "—" : null}                                           subTone="neutral" />
+        <StatCard label="الربح / الخسارة" value={"$" + money(pnl)} subTone={pnl >= 0 ? "pos" : "neg"}                                      sub={pnl >= 0 ? "▲ ربح غير محقق" : "▼ خسارة"} />
+        <StatCard label="الوسيط" value={broker?.mode === "paper" ? "ورقي" : (broker?.provider || "—")} sub={broker?.connected ? "متصل" : "غير متصل"} subTone={broker?.connected ? "pos" : "neutral"} />
+        <StatCard label="الذكاء الاصطناعي"  value={ai?.effective_status === "ready" ? "جاهز" : "غير متصل"} sub={ai?.ollama?.model || "—"} subTone={ai?.effective_status === "ready" ? "pos" : "neutral"} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="tv-card">
+          <p className="tv-section-title">المؤشرات الرئيسية</p>
+          {mktLoading
+            ? <div className="tv-skeleton" style={{ height: 120 }} />
+            : indices.length === 0
+            ? <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا بيانات</p>
+            : <table className="tv-table" style={{ width: "100%" }}>
+                <thead><tr><th>المؤشر</th><th>السعر</th><th>التغيير</th></tr></thead>
+                <tbody>{indices.map((idx, i) => <IndexRow key={i} item={idx} />)}</tbody>
+              </table>
+          }
+        </div>
+        <div className="tv-card">
+          <p className="tv-section-title">آخر الأخبار</p>
+          {newsItems.length === 0
+            ? <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا أخبار اليوم</p>
+            : <div>{newsItems.map((n, i) => <NewsRow key={i} item={n} />)}</div>
+          }
+        </div>
+      </div>
+
+      {signalList.length > 0 && (
+        <div className="tv-card">
+          <p className="tv-section-title">آخر الإشارات</p>
+          <table className="tv-table" style={{ width: "100%" }}>
+            <thead><tr><th>الرمز</th><th>الإشارة</th><th>الثقة</th><th>الوقت</th></tr></thead>
+            <tbody>
+              {signalList.map((s, i) => {
+                const dir = String(s.signal || s.direction || "").toUpperCase();
+                const up = dir === "BUY" || dir === "BULLISH" || dir === "LONG";
+                const pill = { display:"inline-flex",alignItems:"center",padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:600,
+                  background: up ? "rgba(8,153,129,0.15)" : "rgba(242,54,69,0.15)",
+                  color: up ? "var(--tv-positive)" : "var(--tv-negative)" };
+                return (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{s.symbol || s.instrument}</td>
+                    <td><span style={pill}>{dir || "—"}</span></td>
+                    <td style={{ color: "var(--tv-text-muted)" }}>{s.confidence ? Number(s.confidence).toFixed(0) + "%" : "—"}</td>
+                    <td style={{ color: "var(--tv-text-muted)", fontSize: 11 }}>{s.created_at ? new Date(s.created_at).toLocaleTimeString("ar-SA",{hour:"2-digit",minute:"2-digit"}) : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
-      {/* Main content: Chart + Decision */}
-      <div className="command-grid">
-        {/* Trading Chart */}
-        <TradingChart
-          className="col-span-7"
-          title="مساحة القرار"
-          description="الرمز المحوري مع مناطق القرار والمستويات الرئيسية."
-          decision={decision}
-          summaryItems={chartSummaryItems}
-          loading={decisionLoading}
-          height={420}
-        />
-
-        {/* Decision Panel */}
-        <DecisionPanel
-          className="col-span-5"
-          decision={decision}
-          loading={decisionLoading}
-          error={decisionError}
-          title="القرار الحالي"
-          description="الموقف، الأدلة، والأهداف للرمز المحوري."
-        />
-
-        {/* Workspace */}
-        <SectionCard
-          className="col-span-7"
-          title="مساحة العمل"
-          description="رموز المتابعة النشطة — انقر لتغيير التركيز."
-          action={<StatusBadge label={`${workspaceQuotes.length} رموز`} tone="neutral" dot={false} />}
-        >
-          {workspaceQuotes.length ? (
-            <>
-              <div className="workspace-symbol-actions">
-                {workspaceQuotes.map((q) => (
-                  <button
-                    key={q.symbol}
-                    className={`workspace-symbol-chip${focusSymbol === q.symbol ? " active" : ""}`}
-                    onClick={() => setFocusSymbol(q.symbol)}
-                    type="button"
-                  >
-                    {q.symbol}
-                  </button>
-                ))}
-              </div>
-              <div className="result-grid">
-                {workspaceQuotes.map((q) => (
-                  <MetricCard
-                    key={q.symbol}
-                    label={q.symbol}
-                    value={q.price ?? "-"}
-                    detail={`${q.change_pct ?? 0}%`}
-                    tone={Number(q.change_pct || 0) >= 0 ? "positive" : "negative"}
-                    onClick={() => setFocusSymbol(q.symbol)}
-                  />
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">
-              <span className="empty-state-title">ابدأ برمز واحد</span>
-              <span className="empty-state-text">اختر رمزاً من شريط العمل ثم ثبّته.</span>
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Batch Intelligence */}
-        <SectionCard
-          className="col-span-5"
-          title="الاستدلال الدفعي"
-          description="تحديث ذكي لرموز مساحة العمل."
-          action={
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => handleBatch().catch(() => {})}
-              disabled={batchJob.submitting || !workspaceSymbols.length}
-              type="button"
-            >
-              {batchJob.submitting ? "جارٍ..." : "تشغيل"}
-            </button>
-          }
-        >
-          {batchResult?.items?.length ? (
-            <div className="dashboard-feed-list">
-              {batchResult.items.slice(0, 4).map((item, i) => (
-                <div className="dashboard-feed-item" key={item.instrument || i}>
-                  <div className="dashboard-feed-copy">
-                    <strong>{item.instrument || item.symbol || "Batch"}</strong>
-                    <p>{item.setup_type || item.reasons || "Analysis complete"}</p>
-                  </div>
-                  <SignalBadge signal={item.smart_signal || item.signal || "HOLD"} />
-                </div>
-              ))}
-            </div>
-          ) : batchJob.currentJob?.status === "running" ? (
-            <LoadingSkeleton lines={3} />
-          ) : (
-            <div className="empty-state">
-              <span className="empty-state-text">اضغط "تشغيل" لتحديث الإشارات.</span>
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Opportunities */}
-        <SectionCard
-          className="col-span-7"
-          title="فرص المتابعة"
-          description="أقرب الرموز للانتقال إلى التحليل أو التنفيذ."
-          action={<StatusBadge label={`${opportunities.length} فرص`} tone="neutral" dot={false} />}
-        >
-          {loading ? <LoadingSkeleton lines={4} /> : opportunities.length ? (
-            <div className="dashboard-decision-list">
-              {opportunities.map((item) => (
-                <div className="dashboard-decision-item" key={item.symbol}>
-                  <div className="dashboard-decision-primary">
-                    <strong>{item.symbol}</strong>
-                    <p>{item.security_name || "فرصة متابعة"}</p>
-                  </div>
-                  <div className="dashboard-decision-metrics">
-                    <span className={Number(item.change_pct || 0) >= 0 ? "quote-positive" : "quote-negative"}>
-                      {item.change_pct ?? 0}%
-                    </span>
-                    <small>{item.price ?? "-"}</small>
-                  </div>
-                  <div className="dashboard-decision-actions">
-                    <Link className="btn btn-ghost btn-xs" to={`/analyze?symbol=${encodeURIComponent(item.symbol)}`}>تحليل</Link>
-                    <Link className="btn btn-ghost btn-xs" to={`/paper-trading?symbol=${encodeURIComponent(item.symbol)}`}>ورقي</Link>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <span className="empty-state-title">لا توجد فرص حالياً</span>
-              <span className="empty-state-text">ستظهر هنا بعد تحديث الإشارات.</span>
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Smart Automation */}
-        <SectionCard
-          className="col-span-5"
-          title="الأتمتة الذكية"
-          description="تنبيهات ذكية من المحرك التلقائي — فرص مكتشفة بالذكاء الاصطناعي."
-          action={
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => handleSmartCycle().catch(() => {})}
-              disabled={smartLoading}
-              type="button"
-            >
-              {smartLoading ? "جارٍ..." : "فحص ذكي"}
-            </button>
-          }
-        >
-          {smartAlerts.length ? (
-            <div className="dashboard-feed-list">
-              {smartAlerts.map((alert) => (
-                <div className="dashboard-feed-item" key={alert.id}>
-                  <div className="dashboard-feed-copy">
-                    <strong>{alert.symbol} · {alert.signal}</strong>
-                    <p>{alert.recommendation || alert.ai_summary || "فرصة مكتشفة"}</p>
-                  </div>
-                  <StatusBadge
-                    label={alert.quality || `${alert.confidence}%`}
-                    tone={alert.signal === "BUY" ? "positive" : alert.signal === "SELL" ? "negative" : "neutral"}
-                    dot={false}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <span className="empty-state-text">اضغط "فحص ذكي" لاكتشاف الفرص.</span>
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Alerts & Engine State */}
-        <SectionCard
-          className="col-span-5"
-          title="التنبيهات والمحرك"
-          description="حالة التعلم المستمر وآخر التنبيهات."
-          action={<StatusBadge label={learningState.runtime_status || "idle"} tone={statusTone(learningState.runtime_status)} />}
-        >
-          {loading ? <LoadingSkeleton lines={4} /> : (
-            <>
-              <SummaryStrip
-                compact
-                items={[
-                  { label: "آخر نجاح", value: learningState.last_success_at || "-" },
-                  { label: "الدورة التالية", value: learningState.next_cycle_at || "-" },
-                  { label: "تنبيهات المخاطر", value: summary?.risk?.portfolio_warnings?.length ?? 0, tone: "warning" },
-                ]}
-              />
-              {alerts.length ? (
-                <div className="dashboard-feed-list" style={{ marginTop: "var(--space-3)" }}>
-                  {alerts.map((alert) => (
-                    <div className="dashboard-feed-item" key={alert.id}>
-                      <div className="dashboard-feed-copy">
-                        <strong>{`${alert.symbol || "SYSTEM"} · ${alert.alert_type}`}</strong>
-                        <p>{alert.message}</p>
-                      </div>
-                      <StatusBadge label={alert.severity} tone={alert.severity === "warning" ? "warning" : "neutral"} dot={false} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">
-                  <span className="empty-state-text">لا توجد تنبيهات حالياً.</span>
-                </div>
-              )}
-            </>
-          )}
-        </SectionCard>
-      </div>
-    </PageFrame>
+    </div>
   );
 }

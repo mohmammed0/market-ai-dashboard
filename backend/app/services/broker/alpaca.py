@@ -55,11 +55,12 @@ def _serialize_account(account: Any) -> dict:
 
 
 def _serialize_position(position: Any) -> dict:
-    side = _coerce_text(getattr(position, "side", None)) or "long"
+    _raw_side = _coerce_text(getattr(position, "side", None)) or "long"
+    side = _raw_side.split(".")[-1].upper()  # "PositionSide.LONG" → "LONG"
     qty = _safe_float(getattr(position, "qty", None))
     return {
         "symbol": _coerce_text(getattr(position, "symbol", None)),
-        "side": side.upper(),
+        "side": side,
         "qty": qty,
         "avg_entry_price": _safe_float(getattr(position, "avg_entry_price", None)),
         "market_value": _safe_float(getattr(position, "market_value", None)),

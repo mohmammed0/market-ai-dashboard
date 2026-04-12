@@ -8,6 +8,7 @@ from backend.app.services.market_universe import (
     resolve_universe_preset,
     search_market_universe,
 )
+from core.market_data_providers import get_market_data_provider_status
 
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -56,3 +57,8 @@ def market_overview():
 @router.get("/symbol/{ticker}/snapshot")
 def market_symbol_snapshot(ticker: str):
     return get_market_symbol_snapshot(ticker)
+
+@router.get("/data-provider")
+def market_data_provider_status():
+    """Return the active market data provider chain and each provider's readiness."""
+    return get_market_data_provider_status()

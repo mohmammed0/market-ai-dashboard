@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import logging
+import os
 
 import pandas as pd
 from sqlalchemy import desc
@@ -13,6 +14,33 @@ from backend.app.services.storage import dumps_json, loads_json, session_scope
 from core.market_data_providers import fetch_snapshot_from_providers, get_market_data_provider_status
 from core.source_data import load_symbol_source_data, normalize_symbol
 from core.runtime_paths import SOURCE_CACHE_DIR
+
+
+def sync_alpaca_credentials_from_runtime() -> None:
+    """Pull Alpaca credentials from the broker runtime config (DB) into os.environ
+    if the market-data env vars are not already set.  Called once at backend startup
+    so that AlpacaMarketDataProvider.configured() returns True when keys were entered
+    via the Settings UI rather than hard-coded in environment variables."""
+    if os.getenv("ALPACA_MARKET_DATA_API_KEY") or os.getenv("ALPACA_API_KEY"):
+        return  # already supplied via environment; nothing to do
+    try:
+        from backend.app.services.runtime_settings import get_alpaca_runtime_config
+        config = get_alpaca_runtime_config()
+        api_key = (config.get("api_key") or "").strip()
+        secret_key = (config.get("secret_key") or "").strip()
+        if api_key and secret_key:
+            # Set both the specific market-data keys and the generic broker keys
+            # so that _alpaca_api_key() finds them regardless of which env var is checked.
+            os.environ["ALPACA_MARKET_DATA_API_KEY"] = api_key
+            os.environ["ALPACA_MARKET_DATA_SECRET_KEY"] = secret_key
+            os.environ["ALPACA_API_KEY"] = api_key
+            os.environ["ALPACA_SECRET_KEY"] = secret_key
+            logger.info(
+                "market_data.alpaca_credentials_synced_from_runtime "
+                "source=%s", config.get("api_key_source", "db")
+            )
+    except Exception as exc:
+        logger.warning("market_data.alpaca_credentials_sync_failed error=%s", exc)
 
 
 DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "SPY"]

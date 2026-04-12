@@ -31,7 +31,7 @@ class BrokerPositionSnapshot(Base):
     mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="paper")
     account_id: Mapped[str | None] = mapped_column(String(120), index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
-    side: Mapped[str | None] = mapped_column(String(12))
+    side: Mapped[str | None] = mapped_column(String(32))
     qty: Mapped[float | None] = mapped_column(Float)
     market_value: Mapped[float | None] = mapped_column(Float)
     unrealized_pnl: Mapped[float | None] = mapped_column(Float)

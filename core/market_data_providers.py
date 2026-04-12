@@ -7,13 +7,13 @@ import logging
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+import os
+
 import pandas as pd
 
 from core.market_data_settings import (
-    ALPACA_MARKET_DATA_API_KEY,
     ALPACA_MARKET_DATA_BASE_URL,
     ALPACA_MARKET_DATA_FEED,
-    ALPACA_MARKET_DATA_SECRET_KEY,
     MARKET_DATA_PRIMARY_PROVIDER,
     MARKET_DATA_PROVIDER_CHAIN,
     MARKET_DATA_SESSION_CLOSE_BUFFER_MINUTES,
@@ -28,6 +28,18 @@ from core.market_data_settings import (
     TWELVEDATA_MARKET_DATA_API_KEY,
     TWELVEDATA_MARKET_DATA_BASE_URL,
 )
+
+
+def _alpaca_api_key() -> str:
+    """Dynamic lookup so credentials injected into os.environ after startup are picked up.
+    Uses `or` chaining so empty-string env vars (set by docker-compose as empty) fall through."""
+    return (os.getenv("ALPACA_MARKET_DATA_API_KEY") or os.getenv("ALPACA_API_KEY") or "").strip()
+
+
+def _alpaca_secret_key() -> str:
+    """Dynamic lookup so credentials injected into os.environ after startup are picked up.
+    Uses `or` chaining so empty-string env vars (set by docker-compose as empty) fall through."""
+    return (os.getenv("ALPACA_MARKET_DATA_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY") or "").strip()
 
 try:
     import yfinance as yf
@@ -182,18 +194,18 @@ class AlpacaMarketDataProvider(MarketDataProvider):
     }
 
     def configured(self) -> bool:
-        return bool(ALPACA_MARKET_DATA_API_KEY and ALPACA_MARKET_DATA_SECRET_KEY)
+        return bool(_alpaca_api_key() and _alpaca_secret_key())
 
     def supports_history(self, interval: str) -> bool:
         return str(interval or "1d").strip().lower() in self._interval_map
 
     def configuration_detail(self) -> str:
-        return "configured" if self.configured() else "missing Alpaca market-data credentials"
+        return "configured" if self.configured() else "missing ALPACA_MARKET_DATA_API_KEY / ALPACA_API_KEY credentials"
 
     def _headers(self) -> dict:
         return {
-            "APCA-API-KEY-ID": ALPACA_MARKET_DATA_API_KEY,
-            "APCA-API-SECRET-KEY": ALPACA_MARKET_DATA_SECRET_KEY,
+            "APCA-API-KEY-ID": _alpaca_api_key(),
+            "APCA-API-SECRET-KEY": _alpaca_secret_key(),
         }
 
     def fetch_history(self, symbol: str, start_date=None, end_date=None, interval: str = "1d") -> ProviderHistoryResult:
