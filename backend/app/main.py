@@ -51,6 +51,7 @@ from backend.app.api.routes import (
     fundamentals_router,
     position_sizing_router,
     portfolio_risk_router,
+    notifications_router,
 )
 from backend.app.config import (
     ALLOWED_ORIGINS,
@@ -184,6 +185,11 @@ def on_startup():
         sync_alpaca_credentials_from_runtime()
     except Exception:
         pass
+    try:
+        from backend.app.services.telegram_sync import sync_telegram_credentials_from_runtime
+        sync_telegram_credentials_from_runtime()
+    except Exception:
+        pass
     init_db(run_migrations=DATABASE_RUN_MIGRATIONS_ON_STARTUP)
     try:
         initialize_workspace_defaults()
@@ -271,3 +277,4 @@ app.include_router(macro_router, prefix="/api")
 app.include_router(position_sizing_router, prefix="/api")
 app.include_router(portfolio_risk_router, prefix="/api")
 app.include_router(fundamentals_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")

@@ -16,7 +16,23 @@ def list_alert_history(limit: int = 100, severity: str | None = None) -> dict:
 def append_alert(record: AlertRecord) -> dict:
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        return repo.append_alert(record).model_dump(mode="json")
+        result = repo.append_alert(record).model_dump(mode="json")
+    # Deliver Telegram notification (non-blocking, never raises)
+    try:
+        from core.telegram_notifier import is_telegram_configured, send_telegram_message
+        if is_telegram_configured():
+            sev = (record.severity or "info").upper()
+            icon = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(sev, "📢")
+            lines = [
+                f"{icon} <b>[{sev}] {record.alert_type or 'Alert'}</b>",
+                f"<b>Symbol:</b> {record.symbol or 'N/A'}",
+            ]
+            if record.message:
+                lines.append(record.message)
+            send_telegram_message("\n".join(lines))
+    except Exception:
+        pass
+    return result
 
 
 def resolve_alert_symbols(preset: str = "ALL_US_EQUITIES", limit: int = 30) -> list[str]:

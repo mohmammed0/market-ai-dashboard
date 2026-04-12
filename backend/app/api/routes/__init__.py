@@ -41,6 +41,7 @@ from .training import router as training_router
 from .watchlists import router as watchlists_router
 from .workspace import router as workspace_router
 from .auth import router as auth_router
+from .notifications import router as notifications_router
 
 __all__ = [
     "analyze_router",
