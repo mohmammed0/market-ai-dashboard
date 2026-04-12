@@ -31,13 +31,15 @@ from core.market_data_settings import (
 
 
 def _alpaca_api_key() -> str:
-    """Dynamic lookup so credentials injected into os.environ after startup are picked up."""
-    return os.getenv("ALPACA_MARKET_DATA_API_KEY", os.getenv("ALPACA_API_KEY", "")).strip()
+    """Dynamic lookup so credentials injected into os.environ after startup are picked up.
+    Uses `or` chaining so empty-string env vars (set by docker-compose as empty) fall through."""
+    return (os.getenv("ALPACA_MARKET_DATA_API_KEY") or os.getenv("ALPACA_API_KEY") or "").strip()
 
 
 def _alpaca_secret_key() -> str:
-    """Dynamic lookup so credentials injected into os.environ after startup are picked up."""
-    return os.getenv("ALPACA_MARKET_DATA_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", "")).strip()
+    """Dynamic lookup so credentials injected into os.environ after startup are picked up.
+    Uses `or` chaining so empty-string env vars (set by docker-compose as empty) fall through."""
+    return (os.getenv("ALPACA_MARKET_DATA_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY") or "").strip()
 
 try:
     import yfinance as yf

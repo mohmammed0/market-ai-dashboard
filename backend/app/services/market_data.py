@@ -29,6 +29,10 @@ def sync_alpaca_credentials_from_runtime() -> None:
         api_key = (config.get("api_key") or "").strip()
         secret_key = (config.get("secret_key") or "").strip()
         if api_key and secret_key:
+            # Set both the specific market-data keys and the generic broker keys
+            # so that _alpaca_api_key() finds them regardless of which env var is checked.
+            os.environ["ALPACA_MARKET_DATA_API_KEY"] = api_key
+            os.environ["ALPACA_MARKET_DATA_SECRET_KEY"] = secret_key
             os.environ["ALPACA_API_KEY"] = api_key
             os.environ["ALPACA_SECRET_KEY"] = secret_key
             logger.info(
