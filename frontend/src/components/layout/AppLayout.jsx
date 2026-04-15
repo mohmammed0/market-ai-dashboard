@@ -16,6 +16,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    path: "/ai-chat",
+    label: "المحلل الذكي",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+        <line x1="9" y1="10" x2="15" y2="10" />
+        <line x1="9" y1="14" x2="13" y2="14" />
+      </svg>
+    ),
+  },
+  {
     path: "/live-market",
     label: "السوق المباشر",
     icon: (
@@ -26,18 +37,88 @@ const NAV_ITEMS = [
     ),
   },
   {
-    path: "/ai-market",
-    label: "محطة السوق الذكية",
+    path: "/multi-chart",
+    label: "الشارتات",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-        <polyline points="16 7 22 7 22 13" />
+        <rect x="2" y="2" width="9" height="9" rx="1" />
+        <rect x="13" y="2" width="9" height="9" rx="1" />
+        <rect x="2" y="13" width="9" height="9" rx="1" />
+        <rect x="13" y="13" width="9" height="9" rx="1" />
+      </svg>
+    ),
+  },
+  {
+    path: "/ai-market",
+    label: "محطة التحليل",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 20V10" />
+        <path d="M18 20V4" />
+        <path d="M6 20v-4" />
+      </svg>
+    ),
+  },
+  {
+    path: "/watchlist",
+    label: "قائمة المتابعة",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="9" y1="9" x2="15" y2="9" />
+        <line x1="9" y1="12" x2="15" y2="12" />
+        <line x1="9" y1="15" x2="13" y2="15" />
+      </svg>
+    ),
+  },
+  {
+    path: "/ranking",
+    label: "ترتيب الأسهم",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="8" y1="6" x2="21" y2="6" />
+        <line x1="8" y1="12" x2="21" y2="12" />
+        <line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" />
+        <line x1="3" y1="12" x2="3.01" y2="12" />
+        <line x1="3" y1="18" x2="3.01" y2="18" />
+      </svg>
+    ),
+  },
+  {
+    path: "/alerts-center",
+    label: "التنبيهات",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 01-3.46 0" />
+      </svg>
+    ),
+  },
+  {
+    path: "/ai-news",
+    label: "الأخبار",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l6 6v8a2 2 0 01-2 2z" />
+        <polyline points="17 21 17 13 7 13 7 21" />
+        <polyline points="7 3 7 8 15 8" />
+      </svg>
+    ),
+  },
+  {
+    path: "/breadth",
+    label: "مسح السوق",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
       </svg>
     ),
   },
   {
     path: "/macro",
-    label: "البيئة الاقتصادية",
+    label: "الاقتصاد الكلي",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="10" />
@@ -48,7 +129,7 @@ const NAV_ITEMS = [
   },
   {
     path: "/fundamentals",
-    label: "أساسيات الشركات",
+    label: "التحليل الأساسي",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -58,45 +139,12 @@ const NAV_ITEMS = [
     ),
   },
   {
-    path: "/ai-news",
-    label: "أخبار الذكاء",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l6 6v8a2 2 0 01-2 2z" />
-        <polyline points="17 21 17 13 7 13 7 21" />
-        <polyline points="7 3 7 8 15 8" />
-      </svg>
-    ),
-  },
-  {
-    path: "/paper-trading",
-    label: "التداول الورقي",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
-        <rect x="9" y="3" width="6" height="4" rx="1" />
-        <line x1="9" y1="12" x2="15" y2="12" />
-        <line x1="9" y1="16" x2="12" y2="16" />
-      </svg>
-    ),
-  },
-  {
     path: "/backtest",
     label: "الاختبار التاريخي",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="7 12 3 8 7 4" />
-        <path d="M21 12H3" />
-        <polyline points="7 20 3 16 7 12" />
-      </svg>
-    ),
-  },
-  {
-    path: "/strategy-lab",
-    label: "مختبر الاستراتيجية",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2v-4M9 21H5a2 2 0 01-2-2v-4m0 0h18" />
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
       </svg>
     ),
   },
@@ -114,20 +162,14 @@ const NAV_ITEMS = [
 
 function PlatformStatusDots() {
   const { data: aiStatus } = useAppData("aiStatus");
-  const { data: brokerStatus } = useAppData("brokerStatus");
 
   const aiOk = aiStatus?.status === "running" || aiStatus?.status === "ready" || aiStatus?.status === "ok";
-  const brokerOk = brokerStatus?.connected === true || brokerStatus?.status === "connected" || brokerStatus?.status === "ok";
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div className="tv-status-indicator" title={`AI: ${aiStatus?.status || "..."}`}>
         <span className={`tv-status-dot ${aiOk ? "tv-status-dot--ok" : "tv-status-dot--warn"}`} />
         <span className="tv-status-label">AI</span>
-      </div>
-      <div className="tv-status-indicator" title={`Broker: ${brokerStatus?.status || "..."}`}>
-        <span className={`tv-status-dot ${brokerOk ? "tv-status-dot--ok" : "tv-status-dot--warn"}`} />
-        <span className="tv-status-label">Broker</span>
       </div>
     </div>
   );
@@ -144,9 +186,7 @@ export default function AppLayout({ children }) {
 
   return (
     <div className="tv-shell" dir="rtl">
-      {/* Left icon sidebar - positioned on right in RTL */}
       <aside className="tv-sidebar">
-        {/* Logo mark */}
         <div className="tv-sidebar-logo" title="Market AI">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="var(--tv-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
@@ -156,7 +196,6 @@ export default function AppLayout({ children }) {
 
         <div className="tv-sidebar-divider" />
 
-        {/* Nav items */}
         <nav className="tv-sidebar-nav">
           {NAV_ITEMS.map((item) => (
             <NavLink
@@ -172,10 +211,8 @@ export default function AppLayout({ children }) {
           ))}
         </nav>
 
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Logout */}
         <button
           className="tv-nav-item"
           title="تسجيل خروج"
@@ -183,7 +220,7 @@ export default function AppLayout({ children }) {
           style={{ marginBottom: 8 }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
             <polyline points="16 17 21 12 16 7" />
             <line x1="21" y1="12" x2="9" y2="12" />
           </svg>
@@ -191,9 +228,7 @@ export default function AppLayout({ children }) {
         </button>
       </aside>
 
-      {/* Main content area */}
       <div className="tv-main">
-        {/* Top bar */}
         <header className="tv-topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span className="tv-topbar-brand">Market AI</span>
@@ -216,13 +251,8 @@ export default function AppLayout({ children }) {
               day: "numeric",
             }).format(new Date())}
           </div>
-
-          <div className="tv-topbar-user" title={user?.username}>
-            {user?.username?.[0]?.toUpperCase() || "U"}
-          </div>
         </header>
 
-        {/* Page content */}
         <main className="tv-content">
           {children}
         </main>

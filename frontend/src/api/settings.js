@@ -27,3 +27,19 @@ export async function saveAlpacaSettings(payload) {
 export async function testAlpacaSettings() {
   return postJson("/api/settings/runtime/alpaca/test", {});
 }
+
+export async function fetchTelegramStatus() {
+  return getJson("/api/notifications/telegram/status");
+}
+
+export async function saveTelegramSettings(payload) {
+  return postJson("/api/notifications/telegram/configure", payload);
+}
+
+export async function testTelegramConnection() {
+  return postJson("/api/notifications/telegram/test", {});
+}
+
+export async function fetchAutoTradingConfig() {
+  return getJson("/api/settings/runtime/auto-trading");
+}

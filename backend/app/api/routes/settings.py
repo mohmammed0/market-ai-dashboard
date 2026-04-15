@@ -63,6 +63,8 @@ def update_alpaca_settings(payload: AlpacaSettingsUpdateRequest):
             clear_api_key=payload.clear_api_key,
             clear_secret_key=payload.clear_secret_key,
             url_override=payload.url_override,
+            auto_trading_enabled=payload.auto_trading_enabled,
+            order_submission_enabled=payload.order_submission_enabled,
         )
         return {
             "saved": True,
@@ -78,4 +80,14 @@ def test_alpaca_settings():
     try:
         return test_alpaca_runtime_settings()
     except RuntimeSettingsError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/runtime/auto-trading")
+def get_auto_trading_status():
+    """Get current auto-trading configuration status."""
+    from backend.app.services.runtime_settings import get_auto_trading_config
+    try:
+        return get_auto_trading_config()
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

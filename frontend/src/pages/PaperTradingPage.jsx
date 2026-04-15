@@ -14,6 +14,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import useJobRunner from "../hooks/useJobRunner";
+import { buildBrokerPortfolioSnapshot } from "../lib/brokerPortfolio";
 import { cancelPaperOrder, refreshPaperSignals } from "../lib/api";
 import { useAppData, useAppStore } from "../store/AppDataStore";
 import { useWorkspace } from "../lib/useWorkspace";
@@ -32,9 +33,17 @@ export default function PaperTradingPage() {
   const { data: orders, loading: ordersLoading } = useAppData("paperOrders");
   const { data: trades, loading: tradesLoading } = useAppData("paperTrades");
   const { data: signals, loading: signalsLoading } = useAppData("paperSignals");
+  const { data: brokerStatus } = useAppData("brokerStatus");
+  const { data: brokerSummary, loading: brokerSummaryLoading } = useAppData("brokerSummary");
   const { fetchSection } = useAppStore() || {};
+  const brokerPortfolio = useMemo(() => buildBrokerPortfolioSnapshot(brokerSummary), [brokerSummary]);
+  const brokerDataConnected = Boolean(brokerStatus?.connected || brokerSummary?.connected);
+  const usingBrokerData = Boolean(brokerDataConnected && brokerPortfolio);
+  const positionsSectionLoading = usingBrokerData ? brokerSummaryLoading : portfolioLoading;
+  const ordersSectionLoading = usingBrokerData ? brokerSummaryLoading : ordersLoading;
+  const tradesSectionLoading = usingBrokerData ? brokerSummaryLoading : tradesLoading;
 
-  const loading = portfolioLoading && ordersLoading;
+  const loading = brokerDataConnected ? brokerSummaryLoading : portfolioLoading && ordersLoading;
 
   const refreshJob = useJobRunner("paper_signal_refresh", { recentLimit: 6 });
 
@@ -61,6 +70,8 @@ export default function PaperTradingPage() {
         fetchSection("paperOrders", "/api/paper/orders");
         fetchSection("paperTrades", "/api/paper/trades");
         fetchSection("paperSignals", "/api/paper/signals");
+        fetchSection("brokerStatus", "/api/broker/status");
+        fetchSection("brokerSummary", "/api/broker/summary");
       }
       refreshDecision({ symbol: operatorSymbol }).catch(() => {});
     }
@@ -85,20 +96,29 @@ export default function PaperTradingPage() {
     }
   }
 
-  // Portfolio positions
-  const positions = useMemo(() => portfolio?.positions || [], [portfolio]);
-  const summary = portfolio?.summary || {};
+  // Portfolio positions — API returns `items`, older shapes used `positions`
+  const positions = useMemo(
+    () => usingBrokerData ? brokerPortfolio?.items || [] : portfolio?.items || portfolio?.positions || [],
+    [brokerPortfolio, portfolio, usingBrokerData]
+  );
+  const summary = usingBrokerData ? brokerPortfolio?.summary || {} : portfolio?.summary || {};
 
   // Orders list
   const openOrders = useMemo(() => {
+    if (usingBrokerData) {
+      return brokerPortfolio?.open_orders || [];
+    }
     const rawOrders = orders?.orders || orders?.items || (Array.isArray(orders) ? orders : []);
     return rawOrders.filter(o => o.status === "OPEN" || o.status === "open");
-  }, [orders]);
+  }, [brokerPortfolio, orders, usingBrokerData]);
 
   // Trades list
   const tradesList = useMemo(() => {
+    if (usingBrokerData) {
+      return brokerPortfolio?.trades || [];
+    }
     return trades?.trades || trades?.items || (Array.isArray(trades) ? trades : []);
-  }, [trades]);
+  }, [brokerPortfolio, trades, usingBrokerData]);
 
   // Signals list
   const signalsList = useMemo(() => {
@@ -118,6 +138,22 @@ export default function PaperTradingPage() {
     { accessorKey: "unrealized_pnl", header: "PnL غير محققة", cell: ({ row }) => {
       const pnl = Number(row.original.unrealized_pnl);
       return <span className={pnl >= 0 ? "cell-positive" : "cell-negative"}>{isNaN(pnl) ? "-" : pnl.toFixed(2)}</span>;
+    }},
+    { accessorKey: "stop_loss_price", header: "وقف الخسارة", cell: ({ row }) => {
+      const sl = row.original.stop_loss_price;
+      return sl ? <span className="cell-mono" style={{ color: "#FF9800" }}>${Number(sl).toFixed(2)}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>;
+    }},
+    { accessorKey: "trailing_stop_pct", header: "الوقف المتحرك %", cell: ({ row }) => {
+      const tp = row.original.trailing_stop_pct;
+      return tp ? <span className="cell-mono" style={{ color: "#2196F3" }}>{Number(tp).toFixed(1)}%</span> : <span style={{ color: "var(--text-muted)" }}>—</span>;
+    }},
+    { accessorKey: "trailing_stop_price", header: "سعر الوقف المتحرك", cell: ({ row }) => {
+      const tsp = row.original.trailing_stop_price;
+      return tsp ? <span className="cell-mono" style={{ color: "#2196F3" }}>${Number(tsp).toFixed(2)}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>;
+    }},
+    { accessorKey: "high_water_mark", header: "اعلى سعر", cell: ({ row }) => {
+      const hwm = row.original.high_water_mark;
+      return hwm ? <span className="cell-mono" style={{ color: "#089981" }}>${Number(hwm).toFixed(2)}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>;
     }},
   ], []);
 
@@ -139,11 +175,11 @@ export default function PaperTradingPage() {
     { accessorKey: "quantity", header: "الكمية" },
     { accessorKey: "status", header: "الحالة", cell: ({ row }) => <StatusBadge label={row.original.status} tone={row.original.status === "OPEN" ? "info" : "neutral"} dot={false} /> },
     { accessorKey: "id", header: "إجراء", cell: ({ row }) => (
-      row.original.status === "OPEN"
+      !usingBrokerData && row.original.status === "OPEN"
         ? <button className="btn btn-danger btn-xs" type="button" onClick={() => handleCancel(row.original.id)}>إلغاء</button>
         : null
     )},
-  ], []);
+  ], [usingBrokerData]);
 
   const signalColumns = useMemo(() => [
     { accessorKey: "symbol", header: "الرمز", cell: ({ row }) => <span className="cell-primary">{row.original.symbol}</span> },
@@ -169,17 +205,22 @@ export default function PaperTradingPage() {
       }
     >
       <ErrorBanner message={pageError} />
+      {usingBrokerData && (
+        <div className="info-banner">
+          يتم عرض الرصيد والمراكز والأوامر والصفقات من حساب Alpaca المتصل. تبويب الإشارات ما زال يعتمد على محرك التحليل الداخلي.
+        </div>
+      )}
 
       {/* Portfolio Summary */}
       {loading ? <LoadingSkeleton lines={2} /> : (
         <SummaryStrip
           items={[
-            { label: "قيمة المحفظة", value: summary.portfolio_value ?? 0, badge: "$" },
+            { label: "إجمالي الرصيد", value: summary.total_equity ?? summary.portfolio_value ?? 0, badge: "$", tone: "positive" },
+            { label: "الرصيد النقدي", value: summary.cash_balance ?? 0, badge: "$" },
+            { label: "القيمة السوقية", value: summary.total_market_value ?? 0, badge: "$" },
             { label: "P&L غير محققة", value: summary.total_unrealized_pnl ?? 0, tone: Number(summary.total_unrealized_pnl || 0) >= 0 ? "positive" : "negative" },
             { label: "P&L محققة", value: summary.total_realized_pnl ?? 0, tone: Number(summary.total_realized_pnl || 0) >= 0 ? "positive" : "negative" },
             { label: "المراكز المفتوحة", value: summary.open_positions ?? 0 },
-            { label: "نسبة النجاح %", value: summary.win_rate_pct ?? "-" },
-            { label: "إجمالي الصفقات", value: summary.total_trades ?? 0 },
           ]}
         />
       )}
@@ -225,7 +266,7 @@ export default function PaperTradingPage() {
 
           {activeTab === "positions" && (
             <SectionCard title="المراكز المفتوحة" description="أداء المراكز الحالية في الوقت الفعلي.">
-              {portfolioLoading ? <LoadingSkeleton lines={5} /> : (
+              {positionsSectionLoading ? <LoadingSkeleton lines={5} /> : (
                 positions.length
                   ? <DataTable columns={portfolioColumns} data={positions} />
                   : <div className="empty-state"><span className="empty-state-title">لا توجد مراكز مفتوحة</span></div>
@@ -245,7 +286,7 @@ export default function PaperTradingPage() {
 
           {activeTab === "orders" && (
             <SectionCard title="الأوامر المفتوحة" description="أوامر قيد التنفيذ.">
-              {ordersLoading ? <LoadingSkeleton lines={5} /> : (
+              {ordersSectionLoading ? <LoadingSkeleton lines={5} /> : (
                 openOrders.length
                   ? <DataTable columns={orderColumns} data={openOrders} />
                   : <div className="empty-state"><span className="empty-state-title">لا توجد أوامر مفتوحة</span></div>
@@ -255,7 +296,7 @@ export default function PaperTradingPage() {
 
           {activeTab === "trades" && (
             <SectionCard title="سجل الصفقات" description="الصفقات المنفذة.">
-              {tradesLoading ? <LoadingSkeleton lines={5} /> : (
+              {tradesSectionLoading ? <LoadingSkeleton lines={5} /> : (
                 tradesList.length
                   ? <DataTable columns={tradeColumns} data={tradesList.slice(0, 50)} />
                   : <div className="empty-state"><span className="empty-state-title">لا توجد صفقات بعد</span></div>

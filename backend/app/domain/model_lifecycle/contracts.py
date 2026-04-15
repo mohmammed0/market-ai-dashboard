@@ -42,3 +42,6 @@ class TrainingJobSummary(BaseModel):
     run_id: str | None = None
     artifact_path: str | None = None
     error_message: str | None = None
+    worker_id: str | None = None
+    worker_hostname: str | None = None
+    heartbeat_at: str | None = None

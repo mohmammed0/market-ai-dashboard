@@ -154,6 +154,18 @@ def generate_advanced_alerts(symbols: list[str], persist: bool = True) -> dict:
 
     if persist:
         _persist_alerts(alerts)
+        # Send Telegram notification for each generated alert (non-blocking)
+        try:
+            from core.telegram_notifier import send_telegram_message, is_telegram_configured
+            if alerts and is_telegram_configured():
+                for _alert in alerts:
+                    _alert_type = _alert.get("alert_type", "alert")
+                    _symbol = _alert.get("symbol", "")
+                    _detail = _alert.get("message", "")
+                    _msg = f"\U0001f6a8 <b>{_alert_type}</b>\n{_symbol}: {_detail}"
+                    send_telegram_message(_msg)
+        except Exception:
+            pass  # Never let Telegram failure crash the alert pipeline
 
     failed_symbols = sorted({item.get("symbol") for item in errors if item.get("symbol")})
 

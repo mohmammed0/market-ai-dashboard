@@ -28,11 +28,14 @@ const AutomationPage = lazy(() => import("./pages/AutomationPage"));
 const BrokerPage = lazy(() => import("./pages/BrokerPage"));
 const OperationsPage = lazy(() => import("./pages/OperationsPage"));
 const PortfolioExposurePage = lazy(() => import("./pages/PortfolioExposurePage"));
-const ScanPage = lazy(() => import("./pages/ScanPage"));
 
+const BrainDashboardPage = lazy(() => import("./pages/BrainDashboardPage"));
 const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
 const MacroDashboardPage = lazy(() => import("./pages/MacroDashboardPage"));
 const FundamentalsPage = lazy(() => import("./pages/FundamentalsPage"));
+const WatchlistPage = lazy(() => import("./pages/WatchlistPage"));
+const AIChatPage = lazy(() => import("./pages/AIChatPage"));
+const MultiChartPage = lazy(() => import("./pages/MultiChartPage"));
 
 function PageSkeleton() {
   return (
@@ -48,13 +51,7 @@ function PageSkeleton() {
   );
 }
 
-function AuthGuard({ children }) {
-  const location = useLocation();
-  if (!isAuthenticated() && location.pathname !== "/login") {
-    return <Navigate to="/login" replace />;
-  }
-  return children;
-}
+function AuthGuard({ children }) {  if (!isAuthenticated()) {    return <Navigate to="/login" replace />;  }  return children;}
 
 export default function App() {
   return (
@@ -90,10 +87,14 @@ export default function App() {
                           <Route path="/broker" element={<BrokerPage />} />
                           <Route path="/operations" element={<OperationsPage />} />
                           <Route path="/portfolio-exposure" element={<PortfolioExposurePage />} />
-                          <Route path="/scan" element={<ScanPage />} />
+                          <Route path="/scan" element={<Navigate to="/ranking?mode=scan" replace />} />
                           <Route path="/ai-market" element={<AIMarketPage />} />
                           <Route path="/macro" element={<MacroDashboardPage />} />
                           <Route path="/fundamentals" element={<FundamentalsPage />} />
+                          <Route path="/watchlist" element={<WatchlistPage />} />
+                          <Route path="/ai-chat" element={<AIChatPage />} />
+                          <Route path="/multi-chart" element={<MultiChartPage />} />
+                          <Route path="/brain" element={<BrainDashboardPage />} />
                         </Routes>
                       </Suspense>
                     </ErrorBoundary>

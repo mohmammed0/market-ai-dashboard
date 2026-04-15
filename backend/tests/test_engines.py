@@ -73,7 +73,8 @@ class TestTechnicalEngine:
         import pandas as pd
         from technical_engine import calculate_technical_indicators
 
-        # Create minimal OHLCV dataframe
+        # Create minimal OHLCV dataframe in the common yfinance-style format:
+        # datetime index with capitalized OHLCV column names.
         dates = pd.date_range("2024-01-01", periods=60, freq="D")
         df = pd.DataFrame({
             "Open": [100 + i * 0.5 for i in range(60)],
@@ -84,9 +85,9 @@ class TestTechnicalEngine:
         }, index=dates)
 
         result = calculate_technical_indicators(df)
-        assert isinstance(result, dict)
-        # Should have standard indicator keys
-        assert "rsi_14" in result or "rsi" in result or "RSI" in result or len(result) > 0
+        assert isinstance(result, pd.DataFrame)
+        assert not result.empty
+        assert {"datetime", "close", "rsi14", "technical_score", "final_signal"}.issubset(result.columns)
 
 
 # ---------------------------------------------------------------------------

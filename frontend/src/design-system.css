@@ -210,6 +210,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   gap: 2px;
   width: 100%;
   padding: 0 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
 }
 
 .tv-nav-item {
@@ -271,6 +274,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .tv-nav-item:hover .tv-nav-tooltip {
   display: block;
+}
+
+.tv-nav-group-label {
+  font-size: 8px;
+  color: var(--tv-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 4px 0 2px;
+  width: 100%;
+  opacity: 0.6;
+  user-select: none;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .tv-main {

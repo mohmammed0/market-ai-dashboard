@@ -63,6 +63,12 @@ SETTING_SPECS: dict[str, SettingSpec] = {
     "alpaca.secret_key": SettingSpec("alpaca.secret_key", "ALPACA_SECRET_KEY", "", secret=True),
     "alpaca.paper": SettingSpec("alpaca.paper", "ALPACA_PAPER", True, kind="bool"),
     "alpaca.url_override": SettingSpec("alpaca.url_override", "ALPACA_URL_OVERRIDE", ""),
+    "auto_trading.enabled": SettingSpec(
+        "auto_trading.enabled",
+        "MARKET_AI_AUTO_TRADING_ENABLED",
+        False,
+        kind="bool",
+    ),
 }
 
 _ALPACA_API_VERSION_SEGMENTS = {"v1", "v2", "v2beta1"}
@@ -312,6 +318,7 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
         detail = "Alpaca credentials are configured."
         status = "ready"
 
+    auto_trading_enabled, auto_trading_source = _resolve_setting("auto_trading.enabled", records)
     return {
         "provider": provider_name,
         "provider_source": provider_source,
@@ -319,6 +326,8 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
         "order_submission_source": order_submission_source,
         "live_execution_enabled": bool(live_execution_enabled),
         "live_execution_source": live_execution_source,
+        "auto_trading_enabled": bool(auto_trading_enabled),
+        "auto_trading_source": auto_trading_source,
         "alpaca": {
             "enabled": bool(alpaca_enabled),
             "enabled_source": alpaca_enabled_source,
@@ -454,6 +463,8 @@ def save_alpaca_runtime_settings(
     clear_api_key: bool = False,
     clear_secret_key: bool = False,
     url_override: str | None = None,
+    auto_trading_enabled: bool | None = None,
+    order_submission_enabled: bool | None = None,
 ) -> dict:
     clean_provider = _coerce_text(provider, default="alpaca").lower()
     if clean_provider not in {"alpaca", "none"}:
@@ -473,6 +484,10 @@ def save_alpaca_runtime_settings(
             _upsert_setting(session, "alpaca.secret_key", str(secret_key).strip(), secret=True)
         if url_override is not None:
             _upsert_setting(session, "alpaca.url_override", clean_url_override, delete_when_blank=True)
+        if auto_trading_enabled is not None:
+            _upsert_setting(session, "auto_trading.enabled", auto_trading_enabled)
+        if order_submission_enabled is not None:
+            _upsert_setting(session, "broker.order_submission_enabled", order_submission_enabled)
     invalidate_runtime_caches()
     overview = get_runtime_settings_overview()["broker"]
     alpaca_overview = overview.get("alpaca", {}) if isinstance(overview, dict) else {}
@@ -546,3 +561,25 @@ def test_alpaca_runtime_settings() -> dict:
         result = {"ok": False, "detail": detail, "mode": mode}
         log_event(logger, logging.WARNING, "runtime_settings.alpaca.test", ok=False, reason="connection_failed", mode=mode, detail=detail)
         return result
+
+
+def get_auto_trading_config() -> dict:
+    """Get auto-trading configuration from runtime settings."""
+    auto_enabled, auto_source = _resolve_setting("auto_trading.enabled")
+    order_sub, order_sub_source = _resolve_setting("broker.order_submission_enabled")
+    alpaca_config = get_alpaca_runtime_config()
+    return {
+        "auto_trading_enabled": bool(auto_enabled),
+        "auto_trading_source": auto_source,
+        "order_submission_enabled": bool(order_sub),
+        "alpaca_enabled": alpaca_config.get("enabled", False),
+        "alpaca_configured": alpaca_config.get("configured", False),
+        "alpaca_paper": alpaca_config.get("paper", True),
+        "ready": bool(auto_enabled) and bool(order_sub) and alpaca_config.get("enabled", False) and alpaca_config.get("configured", False),
+    }
+
+
+def is_auto_trading_enabled() -> bool:
+    """Quick check: is auto-trading fully enabled and configured?"""
+    config = get_auto_trading_config()
+    return config["ready"]

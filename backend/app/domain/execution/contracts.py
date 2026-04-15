@@ -47,6 +47,10 @@ class PositionState(BaseModel):
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     status: str = "OPEN"
+    stop_loss_price: float | None = None
+    trailing_stop_pct: float | None = None
+    trailing_stop_price: float | None = None
+    high_water_mark: float | None = None
     opened_at: datetime | None = None
     updated_at: datetime | None = None
 

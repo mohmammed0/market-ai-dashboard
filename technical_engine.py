@@ -1,4 +1,5 @@
-﻿import pandas as pd
+import numpy as np
+import pandas as pd
 
 try:
     import talib
@@ -8,18 +9,49 @@ except Exception:
     TALIB_AVAILABLE = False
 
 
+def _normalize_ohlcv_frame(df):
+    normalized = df.copy()
+
+    if "datetime" not in normalized.columns:
+        if "date" in normalized.columns:
+            normalized = normalized.rename(columns={"date": "datetime"})
+        elif isinstance(normalized.index, pd.DatetimeIndex):
+            normalized = normalized.reset_index()
+            normalized = normalized.rename(columns={normalized.columns[0]: "datetime"})
+
+    rename_map = {}
+    canonical_cols = ("open", "high", "low", "close", "volume", "datetime")
+    lower_lookup = {str(column).lower(): column for column in normalized.columns}
+    for canonical in canonical_cols:
+        actual = lower_lookup.get(canonical)
+        if actual is not None and actual != canonical:
+            rename_map[actual] = canonical
+
+    if rename_map:
+        normalized = normalized.rename(columns=rename_map)
+
+    required_cols = ["datetime", "open", "high", "low", "close", "volume"]
+    missing_cols = [column for column in required_cols if column not in normalized.columns]
+    if missing_cols:
+        raise KeyError(f"Missing required OHLCV columns: {', '.join(missing_cols)}")
+
+    normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
+    normalized = normalized.dropna(subset=["datetime"]).copy()
+    return normalized
+
+
 def _calc_cci(high, low, close, period=20):
     tp = (high + low + close) / 3
     sma_tp = tp.rolling(period).mean()
     mad = tp.rolling(period).apply(lambda x: (abs(x - x.mean())).mean(), raw=False)
-    denom = (0.015 * mad).replace(0, pd.NA)
+    denom = (0.015 * mad).replace(0, np.nan)
     return (tp - sma_tp) / denom
 
 
 def _calc_williams_r(high, low, close, period=14):
     highest_high = high.rolling(period).max()
     lowest_low = low.rolling(period).min()
-    base = (highest_high - lowest_low).replace(0, pd.NA)
+    base = (highest_high - lowest_low).replace(0, np.nan)
     return -100 * ((highest_high - close) / base)
 
 
@@ -282,7 +314,7 @@ def _evaluate_row(row):
 
 
 def calculate_technical_indicators(df):
-    df = df.copy()
+    df = _normalize_ohlcv_frame(df)
 
     numeric_cols = ["open", "high", "low", "close", "volume"]
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
@@ -326,7 +358,7 @@ def calculate_technical_indicators(df):
             df["bb_mid"] = bb_mid
             df["bb_upper"] = bb_upper
             df["bb_lower"] = bb_lower
-            df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, pd.NA)
+            df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, np.nan)
 
             df["atr14"] = talib.ATR(high_arr, low_arr, close_arr, timeperiod=14)
 
@@ -372,7 +404,7 @@ def calculate_technical_indicators(df):
             df["bb_mid"] = df["ma20"]
             df["bb_upper"] = df["ma20"] + (rolling_std20 * 2)
             df["bb_lower"] = df["ma20"] - (rolling_std20 * 2)
-            df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, pd.NA)
+            df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, np.nan)
 
             tr_df = pd.concat(
                 [
@@ -387,7 +419,7 @@ def calculate_technical_indicators(df):
 
             low14 = df["low"].rolling(14).min()
             high14 = df["high"].rolling(14).max()
-            stoch_base = (high14 - low14).replace(0, pd.NA)
+            stoch_base = (high14 - low14).replace(0, np.nan)
             df["stoch_k"] = ((df["close"] - low14) / stoch_base) * 100
             df["stoch_d"] = df["stoch_k"].rolling(3).mean()
 
@@ -411,7 +443,7 @@ def calculate_technical_indicators(df):
         df["bb_mid"] = df["ma20"]
         df["bb_upper"] = df["ma20"] + (rolling_std20 * 2)
         df["bb_lower"] = df["ma20"] - (rolling_std20 * 2)
-        df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, pd.NA)
+        df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, np.nan)
 
         tr_df = pd.concat(
             [
@@ -426,7 +458,7 @@ def calculate_technical_indicators(df):
 
         low14 = df["low"].rolling(14).min()
         high14 = df["high"].rolling(14).max()
-        stoch_base = (high14 - low14).replace(0, pd.NA)
+        stoch_base = (high14 - low14).replace(0, np.nan)
         df["stoch_k"] = ((df["close"] - low14) / stoch_base) * 100
         df["stoch_d"] = df["stoch_k"].rolling(3).mean()
 
@@ -437,7 +469,7 @@ def calculate_technical_indicators(df):
 
     df["vol_ma20"] = df["volume"].rolling(20).mean()
     df["volume_ratio"] = df["volume"] / df["vol_ma20"]
-    df["volume_ratio"] = df["volume_ratio"].replace([float("inf"), float("-inf")], pd.NA)
+    df["volume_ratio"] = df["volume_ratio"].replace([float("inf"), float("-inf")], np.nan)
 
     df["returns"] = df["close"].pct_change()
     df["volatility20"] = df["returns"].rolling(20).std() * (252 ** 0.5)
@@ -449,14 +481,14 @@ def calculate_technical_indicators(df):
     df["low_52w"] = df["low"].rolling(252).min()
     df["dist_from_52w_high_pct"] = ((df["close"] / df["high_52w"]) - 1) * 100
     df["dist_from_52w_low_pct"] = ((df["close"] / df["low_52w"]) - 1) * 100
-    df["gap_pct"] = ((df["open"] - prev_close) / prev_close.replace(0, pd.NA)) * 100
+    df["gap_pct"] = ((df["open"] - prev_close) / prev_close.replace(0, np.nan)) * 100
     df["gap_signal"] = "NONE"
     df.loc[df["gap_pct"] >= 1.0, "gap_signal"] = "GAP_UP"
     df.loc[df["gap_pct"] <= -1.0, "gap_signal"] = "GAP_DOWN"
 
     prev_open = df["open"].shift(1)
     body = (df["close"] - df["open"]).abs()
-    candle_range = (df["high"] - df["low"]).replace(0, pd.NA)
+    candle_range = (df["high"] - df["low"]).replace(0, np.nan)
     upper_wick = df["high"] - df[["open", "close"]].max(axis=1)
     lower_wick = df[["open", "close"]].min(axis=1) - df["low"]
 

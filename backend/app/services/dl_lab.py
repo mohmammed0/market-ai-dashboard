@@ -81,6 +81,24 @@ def _make_sequences(df, sequence_length):
     return np.asarray(X, dtype=np.float32), np.asarray(y, dtype=np.int64)
 
 
+def _select_device(device: str | None = None):
+    """Pick training device — env-overridable, auto-detect CUDA if available."""
+    if torch is None:
+        return None
+    import os
+    requested = (device or os.environ.get("MARKET_AI_TORCH_DEVICE") or "auto").strip().lower()
+    if requested == "cpu":
+        return torch.device("cpu")
+    if requested in ("cuda", "gpu"):
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+    # auto
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 def train_sequence_model(
     symbols=None,
     start_date="2020-01-01",
@@ -93,9 +111,14 @@ def train_sequence_model(
     hidden_size=48,
     learning_rate=1e-3,
     set_active=True,
+    batch_size=32,
+    device=None,
 ):
     if torch is None:
         return _dependency_error()
+
+    torch_device = _select_device(device)
+    device_label = str(torch_device)
 
     symbols = [str(symbol).upper().strip() for symbol in (symbols or DEFAULT_SYMBOLS) if str(symbol).strip()]
     df = _build_sequence_frame(symbols, start_date, end_date, horizon_days, buy_threshold, sell_threshold)
@@ -112,12 +135,17 @@ def train_sequence_model(
     X_val, y_val = X[train_end:val_end], y[train_end:val_end]
     X_test, y_test = X[val_end:], y[val_end:]
 
-    model = GRUClassifier(input_size=len(FEATURE_COLUMNS), hidden_size=int(hidden_size))
+    model = GRUClassifier(input_size=len(FEATURE_COLUMNS), hidden_size=int(hidden_size)).to(torch_device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(learning_rate))
     criterion = nn.CrossEntropyLoss()
-    train_loader = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(y_train)), batch_size=32, shuffle=False)
-    val_inputs = torch.tensor(X_val)
-    val_targets = torch.tensor(y_val)
+    train_loader = DataLoader(
+        TensorDataset(torch.tensor(X_train), torch.tensor(y_train)),
+        batch_size=int(batch_size),
+        shuffle=False,
+        pin_memory=(torch_device.type == "cuda"),
+    )
+    val_inputs = torch.tensor(X_val).to(torch_device)
+    val_targets = torch.tensor(y_val).to(torch_device)
 
     best_loss = float("inf")
     patience = 3
@@ -133,6 +161,8 @@ def train_sequence_model(
         model.train()
         running_loss = 0.0
         for batch_inputs, batch_targets in train_loader:
+            batch_inputs = batch_inputs.to(torch_device, non_blocking=True)
+            batch_targets = batch_targets.to(torch_device, non_blocking=True)
             optimizer.zero_grad()
             loss = criterion(model(batch_inputs), batch_targets)
             loss.backward()
@@ -156,8 +186,10 @@ def train_sequence_model(
         if val_loss < best_loss:
             best_loss = val_loss
             patience_left = patience
+            # Always save state_dict on CPU so artifacts load on any machine
+            cpu_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
             torch.save({
-                "state_dict": model.state_dict(),
+                "state_dict": cpu_state,
                 "feature_columns": FEATURE_COLUMNS,
                 "sequence_length": int(sequence_length),
                 "hidden_size": int(hidden_size),
@@ -167,12 +199,12 @@ def train_sequence_model(
             if patience_left <= 0:
                 break
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location=torch_device)
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
     with torch.no_grad():
-        test_inputs = torch.tensor(X_test)
-        test_targets = torch.tensor(y_test)
+        test_inputs = torch.tensor(X_test).to(torch_device)
+        test_targets = torch.tensor(y_test).to(torch_device)
         test_logits = model(test_inputs)
         test_pred = torch.argmax(test_logits, dim=1)
         test_acc = float((test_pred == test_targets).float().mean().item()) if len(X_test) else 0.0
@@ -183,6 +215,7 @@ def train_sequence_model(
         "sequence_length": int(sequence_length),
         "best_checkpoint_path": str(checkpoint_path),
         "classes": ["SELL", "HOLD", "BUY"],
+        "device": device_label,
     }
 
     with session_scope() as session:

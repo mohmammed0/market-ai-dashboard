@@ -7,6 +7,8 @@ from backend.app.config import (
     AUTOMATION_DAILY_SUMMARY_HOUR,
     BREADTH_CYCLE_MINUTES,
     AUTONOMOUS_CYCLE_HOURS,
+    AUTO_TRADING_ENABLED,
+    AUTO_TRADING_CYCLE_MINUTES,
     CONTINUOUS_LEARNING_STARTUP_ENABLED,
     ENABLE_AUTO_RETRAIN,
     ENABLE_AUTONOMOUS_CYCLE,
@@ -128,6 +130,17 @@ def _maintenance_reconcile_job():
         _record_job("maintenance_reconcile", "error", str(exc))
 
 
+def _run_trailing_stop_job():
+    """Check all positions for trailing stop triggers."""
+    try:
+        from backend.app.services.trailing_stop_monitor import run_trailing_stop_check
+        result = run_trailing_stop_check()
+        detail = f"checked={result.get('checked', 0)} triggered={result.get('triggered', 0)} updated={result.get('updated', 0)}"
+        _record_job("trailing_stop_check", "completed", detail)
+    except Exception as exc:
+        _record_job("trailing_stop_check", "error", str(exc))
+
+
 def _run_smart_cycle_job():
     """Run AI-powered smart automation cycle."""
     try:
@@ -177,6 +190,17 @@ def start_scheduler():
             _scheduler.add_job(lambda: _run_automation_job("retrain_cycle"), "interval", hours=RETRAIN_CYCLE_HOURS, id="retrain_cycle", replace_existing=True)
         if ENABLE_AUTONOMOUS_CYCLE:
             _scheduler.add_job(lambda: _run_automation_job("autonomous_cycle"), "interval", hours=AUTONOMOUS_CYCLE_HOURS, id="autonomous_cycle", replace_existing=True)
+        # Trailing stop monitor — check every 5 minutes
+        _scheduler.add_job(_run_trailing_stop_job, "interval", minutes=5, id="trailing_stop_check", replace_existing=True)
+        # Auto-trading — signal-driven paper trading
+        if AUTO_TRADING_ENABLED:
+            _scheduler.add_job(
+                lambda: _run_automation_job("auto_trading_cycle"),
+                "interval",
+                minutes=AUTO_TRADING_CYCLE_MINUTES,
+                id="auto_trading_cycle",
+                replace_existing=True,
+            )
         # Smart automation — AI-powered opportunity scanner
         try:
             _scheduler.add_job(_run_smart_cycle_job, "interval", minutes=45, id="smart_cycle", replace_existing=True)

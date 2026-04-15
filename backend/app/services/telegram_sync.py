@@ -15,7 +15,7 @@ import os
 logger = logging.getLogger(__name__)
 
 
-def sync_telegram_credentials_from_runtime() -> None:
+def sync_telegram_credentials_from_runtime(*, force_refresh: bool = False) -> None:
     """Read TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from DB runtime_settings
     and set them in os.environ if not already present.
 
@@ -25,7 +25,10 @@ def sync_telegram_credentials_from_runtime() -> None:
     Called at startup from backend/app/main.py and
     backend/app/workers/automation_runner.py.
     """
-    if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+    if force_refresh:
+        os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        os.environ.pop("TELEGRAM_CHAT_ID", None)
+    elif os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
         return  # already supplied via environment; nothing to do
 
     try:
@@ -54,9 +57,9 @@ def sync_telegram_credentials_from_runtime() -> None:
         bot_token = db_values.get("telegram_bot_token", "").strip()
         chat_id = db_values.get("telegram_chat_id", "").strip()
 
-        if bot_token and not os.getenv("TELEGRAM_BOT_TOKEN"):
+        if bot_token and (force_refresh or not os.getenv("TELEGRAM_BOT_TOKEN")):
             os.environ["TELEGRAM_BOT_TOKEN"] = bot_token
-        if chat_id and not os.getenv("TELEGRAM_CHAT_ID"):
+        if chat_id and (force_refresh or not os.getenv("TELEGRAM_CHAT_ID")):
             os.environ["TELEGRAM_CHAT_ID"] = chat_id
 
         if bot_token and chat_id:

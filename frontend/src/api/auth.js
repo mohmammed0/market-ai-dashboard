@@ -40,6 +40,4 @@ export function getStoredUser() {
   }
 }
 
-export function isAuthenticated() {
-  return !!localStorage.getItem("market_ai_token");
-}
+export function isAuthenticated() {  return !!localStorage.getItem("market_ai_token");}

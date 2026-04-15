@@ -19,3 +19,5 @@ class AlpacaSettingsUpdateRequest(BaseModel):
     clear_api_key: bool = False
     clear_secret_key: bool = False
     url_override: str | None = Field(default=None, max_length=2048)
+    auto_trading_enabled: bool | None = None
+    order_submission_enabled: bool | None = None

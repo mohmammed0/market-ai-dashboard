@@ -71,8 +71,8 @@ npm run preview:host
 - Existing Python smoke checks:
 
 ```powershell
-.\venv\Scripts\python.exe .\_test_analysis.py
-.\venv\Scripts\python.exe .\_test_full_analysis.py
+.\venv\Scripts\python.exe -m pytest .\backend\tests\test_engines.py
+.\venv\Scripts\python.exe -m pytest .\backend\tests\test_background_jobs.py
 ```
 
 - Frontend Storybook:

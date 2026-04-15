@@ -38,10 +38,13 @@ from .smart_automation import router as smart_automation_router
 from .stack_status import router as stack_status_router
 from .strategy_lab import router as strategy_lab_router
 from .training import router as training_router
+from .training_worker import router as training_worker_router
+from .training_worker import training_jobs_worker_router
 from .watchlists import router as watchlists_router
 from .workspace import router as workspace_router
 from .auth import router as auth_router
 from .notifications import router as notifications_router
+from .ai_chat import router as ai_chat_router
 
 __all__ = [
     "analyze_router",
@@ -80,10 +83,13 @@ __all__ = [
     "stack_status_router",
     "strategy_lab_router",
     "training_router",
+    "training_worker_router",
+    "training_jobs_worker_router",
     "watchlists_router",
     "metrics_router",
     "workspace_router",
     "auth_router",
+    "ai_chat_router",
     "macro_router",
     "position_sizing_router",
     "portfolio_risk_router",

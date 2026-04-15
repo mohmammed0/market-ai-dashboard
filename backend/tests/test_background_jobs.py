@@ -13,6 +13,7 @@ _DB_PATH = Path(_TMP_DIR.name) / "jobs_test.db"
 os.environ["MARKET_AI_DATABASE_URL"] = f"sqlite:///{_DB_PATH.as_posix()}"
 os.environ["MARKET_AI_ENABLE_SCHEDULER"] = "0"
 os.environ["MARKET_AI_ENABLE_CONTINUOUS_LEARNING"] = "0"
+os.environ["MARKET_AI_AUTH_ENABLED"] = "0"
 
 from fastapi.testclient import TestClient
 
@@ -66,7 +67,9 @@ class BackgroundJobsTests(unittest.TestCase):
         self.assertEqual(status_payload["type"], "backtest_classic")
 
     def test_background_job_can_complete_and_persist_result(self):
-        with patch("backend.app.services.background_jobs._spawn_background_job_process", return_value=321):
+        with patch("backend.app.services.background_jobs._spawn_background_job_process", return_value=321), patch(
+            "backend.app.services.background_jobs.is_process_running", return_value=True
+        ):
             created = submit_background_job(
                 job_type=JOB_TYPE_SCAN,
                 payload={
@@ -96,7 +99,9 @@ class BackgroundJobsTests(unittest.TestCase):
             ],
             "summary": {"top_pick": "AAPL"},
         }
-        with patch.dict(background_jobs_module.JOB_EXECUTORS, {JOB_TYPE_SCAN: lambda payload: fake_result}, clear=False):
+        with patch.dict(background_jobs_module.JOB_EXECUTORS, {JOB_TYPE_SCAN: lambda payload: fake_result}, clear=False), patch(
+            "backend.app.services.background_jobs.is_process_running", return_value=True
+        ):
             exit_code = run_background_job(created["job_id"])
 
         self.assertEqual(exit_code, 0)

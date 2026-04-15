@@ -26,6 +26,8 @@ from backend.app.config import (
     DEFAULT_SAMPLE_SYMBOLS,
     ENABLE_AUTO_RETRAIN,
     ENABLE_AUTONOMOUS_CYCLE,
+    AUTO_TRADING_ENABLED,
+    AUTO_TRADING_QUANTITY,
 )
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.models import AutomationArtifact, AutomationRun, MarketUniverseSymbol
@@ -48,6 +50,7 @@ JOB_NAMES = {
     "retrain_cycle": "Retrain Cycle",
     "autonomous_cycle": "Autonomous Cycle",
     "daily_summary": "Daily Summary",
+    "auto_trading_cycle": "Auto Trading Cycle",
 }
 
 
@@ -579,6 +582,247 @@ def _daily_summary(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_PRESE
     ]
 
 
+
+def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_PRESET) -> tuple[str, list[dict]]:
+    """Auto-trading cycle: scan all symbols, generate signals, auto-execute BUY orders.
+
+    Paper-mode friendly: if MARKET_AI_PAPER_TRADING_24_7=1 OR Alpaca is not properly
+    configured, we run the cycle against the INTERNAL paper_positions table with no
+    market-hours restriction and no broker dependency. This lets the bot trade
+    continuously for simulation/learning.
+    """
+    import os
+    from backend.app.services.runtime_settings import is_auto_trading_enabled, get_auto_trading_config
+
+    paper_24_7 = str(os.environ.get("MARKET_AI_PAPER_TRADING_24_7", "1")).strip() in {"1", "true", "True", "yes"}
+
+    # Check runtime settings
+    auto_config = get_auto_trading_config()
+    # In paper-only mode we only need auto_trading.enabled — Alpaca is irrelevant for
+    # internal paper positions. This unblocks trading when broker creds are missing/invalid.
+    paper_ready = bool(auto_config["auto_trading_enabled"])
+    effective_ready = paper_ready if paper_24_7 else auto_config["ready"]
+
+    if not effective_ready:
+        return (
+            f"auto_trading_cycle skipped: not ready (auto_trading={auto_config['auto_trading_enabled']}, "
+            f"order_sub={auto_config['order_submission_enabled']}, alpaca_configured={auto_config['alpaca_configured']}, paper_24_7={paper_24_7})",
+            [{"artifact_type": "auto_trading_status", "artifact_key": "skipped", "payload": {**auto_config, "paper_24_7": paper_24_7}}],
+        )
+
+    if dry_run:
+        return (
+            "auto_trading_cycle dry_run=True",
+            [{"artifact_type": "auto_trading_status", "artifact_key": "dry_run", "payload": {"dry_run": True, **auto_config}}],
+        )
+
+    # Market-hours check: bypass when paper_24_7 is enabled (pure internal simulation).
+    market_open = _is_us_market_open() if not paper_24_7 else True
+    if not market_open:
+        return (
+            "auto_trading_cycle skipped: market is closed",
+            [{"artifact_type": "auto_trading_status", "artifact_key": "market_closed", "payload": {"market_open": False}}],
+        )
+
+    # Cap symbols per cycle so the schedule doesn't overlap with itself.
+    # Each full ML analysis takes ~2 min on a 2-vCPU box, so for a 5-min cycle we
+    # typically pick 2 symbols (see MARKET_AI_AUTO_TRADING_SYMBOL_LIMIT in .env).
+    try:
+        symbol_limit = int(os.environ.get("MARKET_AI_AUTO_TRADING_SYMBOL_LIMIT", "10"))
+    except Exception:
+        symbol_limit = 10
+    symbol_limit = max(1, min(symbol_limit, 500))
+
+    # Use the curated liquid-symbols list (MARKET_AI_SAMPLE_SYMBOLS in .env) — the
+    # full ALL_US_EQUITIES preset pulls in thinly traded penny stocks with no
+    # reliable Yahoo history, which just produces empty cycles.
+    symbols = list(DEFAULT_SAMPLE_SYMBOLS)
+
+    # Rotation: prefer symbols that don't already have an open position so each
+    # cycle has a real chance to generate a NEW trade. Reserve one slot for a
+    # held name so exit signals still get re-evaluated periodically.
+    import random as _random
+    try:
+        from backend.app.application.execution.service import get_internal_portfolio
+        held_payload = get_internal_portfolio(limit=500) or {}
+        held = {
+            str(pos.get("symbol") or "").upper()
+            for pos in (held_payload.get("items") or [])
+            if (pos.get("status") or "").upper() == "OPEN"
+        }
+    except Exception:
+        held = set()
+
+    unheld = [s for s in symbols if s not in held]
+    held_pool = [s for s in symbols if s in held]
+    _random.shuffle(unheld)
+    _random.shuffle(held_pool)
+    if symbol_limit >= 2 and held_pool and unheld:
+        rotation = unheld[: symbol_limit - 1] + held_pool[:1]
+    else:
+        rotation = (unheld + held_pool)[:symbol_limit]
+    symbols = rotation[:symbol_limit] or list(DEFAULT_SAMPLE_SYMBOLS)[:symbol_limit]
+
+    # Run signal refresh with auto-execute.
+    # Use a shorter analysis window for auto-trading so each symbol finishes fast
+    # enough that cycles don't pile up behind the 5-min schedule.
+    from backend.app.application.execution.service import refresh_signals
+    from datetime import datetime as _dt, timedelta as _td
+
+    try:
+        lookback_days = int(os.environ.get("MARKET_AI_AUTO_TRADING_ANALYSIS_LOOKBACK_DAYS", "0"))
+    except Exception:
+        lookback_days = 0
+
+    if lookback_days > 0:
+        end_date = _utc_today_iso()
+        start_date = (_dt.utcnow() - _td(days=lookback_days)).strftime("%Y-%m-%d")
+    else:
+        start_date, end_date = _analysis_window()
+
+    # --- dynamic position sizing: aim for NOTIONAL_PER_TRADE dollars per symbol.
+    # Fetch quotes up-front (cheap) to size each order in shares. Falls back to the
+    # flat AUTO_TRADING_QUANTITY when a quote is unavailable.
+    fallback_qty = max(AUTO_TRADING_QUANTITY, 1.0)
+    try:
+        notional_per_trade = float(os.environ.get("MARKET_AI_AUTO_TRADING_NOTIONAL_PER_TRADE", "0") or 0.0)
+    except Exception:
+        notional_per_trade = 0.0
+
+    price_lookup: dict[str, float] = {}
+    if notional_per_trade > 0 and symbols:
+        try:
+            from backend.app.services.market_data import fetch_quote_snapshots
+            snap = fetch_quote_snapshots(symbols, include_profile=False)
+            for item in (snap or {}).get("items", []):
+                sym = str(item.get("symbol") or "").upper()
+                px = float(item.get("last_price") or item.get("price") or 0.0)
+                if sym and px > 0:
+                    price_lookup[sym] = px
+        except Exception:
+            price_lookup = {}
+
+    def _compute_qty(symbol: str) -> float:
+        if notional_per_trade <= 0:
+            return fallback_qty
+        px = price_lookup.get(symbol.upper(), 0.0)
+        if px <= 0:
+            return fallback_qty
+        shares = max(int(notional_per_trade // px), 1)
+        return float(shares)
+
+    # Loop per symbol when dynamic sizing is active so each order can carry its
+    # own share count. Small N here (typically 2) keeps this practical.
+    aggregate_items: list[dict] = []
+    last_correlation: str | None = None
+    try:
+        if notional_per_trade > 0:
+            for sym in symbols:
+                qty = _compute_qty(sym)
+                sub = refresh_signals(
+                    symbols=[sym],
+                    mode="classic",
+                    start_date=start_date,
+                    end_date=end_date,
+                    auto_execute=True,
+                    quantity=qty,
+                )
+                aggregate_items.extend(sub.get("items", []))
+                last_correlation = sub.get("correlation_id") or last_correlation
+            result = {
+                "items": aggregate_items,
+                "correlation_id": last_correlation,
+                "portfolio": (sub or {}).get("portfolio", {}) if symbols else {},
+            }
+            quantity = fallback_qty  # reported default; per-symbol used above
+        else:
+            result = refresh_signals(
+                symbols=symbols,
+                mode="classic",
+                start_date=start_date,
+                end_date=end_date,
+                auto_execute=True,
+                quantity=fallback_qty,
+            )
+            quantity = fallback_qty
+    except Exception as exc:
+        return (
+            f"auto_trading_cycle failed: {exc}",
+            [{"artifact_type": "auto_trading_error", "artifact_key": "execution_failed", "payload": {"error": str(exc)}}],
+        )
+
+    # Summarize results
+    items = result.get("items", [])
+    buy_signals = [i for i in items if i.get("signal") == "BUY"]
+    sell_signals = [i for i in items if i.get("signal") == "SELL"]
+    hold_signals = [i for i in items if i.get("signal") == "HOLD"]
+    errors = [i for i in items if i.get("error")]
+
+    summary = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "symbols_scanned": len(symbols),
+        "buy_signals": len(buy_signals),
+        "sell_signals": len(sell_signals),
+        "hold_signals": len(hold_signals),
+        "errors": len(errors),
+        "auto_executed": True,
+        "quantity_per_trade": quantity,
+        "correlation_id": result.get("correlation_id"),
+        "top_buys": [
+            {"symbol": i["symbol"], "confidence": i.get("confidence", 0), "price": i.get("price", 0)}
+            for i in sorted(buy_signals, key=lambda x: x.get("confidence", 0), reverse=True)[:5]
+        ],
+        "portfolio": result.get("portfolio", {}),
+    }
+
+    # Send Telegram notification
+    try:
+        from backend.app.services.trade_notifier import notify_auto_trading_summary
+        notify_auto_trading_summary(
+            symbols_scanned=len(symbols),
+            buy_count=len(buy_signals),
+            sell_count=len(sell_signals),
+            hold_count=len(hold_signals),
+            errors=len(errors),
+            top_buys=summary.get("top_buys", []),
+        )
+    except Exception:
+        pass
+
+    detail = (
+        f"auto_trading_cycle scanned={len(symbols)} buys={len(buy_signals)} "
+        f"sells={len(sell_signals)} holds={len(hold_signals)} errors={len(errors)} "
+        f"qty={quantity}"
+    )
+
+    artifacts = [
+        {"artifact_type": "auto_trading_summary", "artifact_key": _utc_today_iso(), "payload": summary},
+        {"artifact_type": "auto_trading_signals", "artifact_key": "latest", "payload": items},
+    ]
+
+    return detail, artifacts
+
+
+def _is_us_market_open() -> bool:
+    """Check if the US stock market is currently open (9:30 AM - 4:00 PM ET, weekdays)."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo
+
+    now_et = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("America/New_York"))
+
+    # Weekend check
+    if now_et.weekday() >= 5:
+        return False
+
+    # Market hours: 9:30 AM to 4:00 PM ET
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return market_open <= now_et <= market_close
+
+
 def run_automation_job(job_name: str, dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_PRESET) -> dict:
     normalized = str(job_name or "").strip().lower()
     started_at = datetime.utcnow()
@@ -589,6 +833,7 @@ def run_automation_job(job_name: str, dry_run: bool = False, preset: str = AUTOM
         "retrain_cycle": lambda: _retrain_cycle(dry_run=dry_run),
         "autonomous_cycle": lambda: _autonomous_cycle(dry_run=dry_run, preset=preset),
         "daily_summary": lambda: _daily_summary(dry_run=dry_run, preset=preset),
+        "auto_trading_cycle": lambda: _auto_trading_cycle(dry_run=dry_run, preset=preset),
     }
     handler = handlers.get(normalized)
     if handler is None:

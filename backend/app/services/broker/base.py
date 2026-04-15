@@ -58,6 +58,17 @@ class BrokerProvider:
         status = self.get_status()
         return {**status, "items": [], "count": 0}
 
+    def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
+                     time_in_force: str = "day", limit_price: float | None = None,
+                     stop_price: float | None = None, take_profit_price: float | None = None,
+                     stop_loss_price: float | None = None) -> dict:
+        """Submit an order to the broker. Returns order details or error."""
+        return {"ok": False, "error": "Broker does not support order submission.", "order": None}
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel an existing order."""
+        return {"ok": False, "error": "Broker does not support order cancellation."}
+
     def get_summary(self, refresh: bool = False) -> dict:
         account_payload = self.get_account(refresh=refresh)
         positions_payload = self.get_positions(refresh=refresh)

@@ -14,7 +14,18 @@ router = APIRouter(prefix="/broker", tags=["broker"])
 
 @router.get("/status")
 def broker_status():
-    return get_broker_status()
+    try:
+        return get_broker_status()
+    except Exception as exc:
+        return {
+            "provider": "none",
+            "effective_mode": "disabled",
+            "connected": False,
+            "enabled": False,
+            "configured": False,
+            "detail": str(exc),
+            "sdk_installed": False,
+        }
 
 
 @router.get("/summary")

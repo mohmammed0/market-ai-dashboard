@@ -44,22 +44,34 @@ def _dependency_error():
 
 
 def _build_training_frame(symbols, start_date, end_date, horizon_days, buy_threshold, sell_threshold):
+    import logging as _logging
+    _btf_logger = _logging.getLogger(__name__)
     parts = []
     for symbol in symbols:
-        raw = _load_local_csv(symbol, start_date, end_date)
-        if raw.empty:
+        try:
+            raw = _load_local_csv(symbol, start_date, end_date)
+            if raw.empty:
+                continue
+            features = build_feature_frame(raw, instrument=symbol)
+            if features.empty:
+                continue
+            dataset = create_target_labels(
+                features,
+                horizon_days=horizon_days,
+                buy_threshold=buy_threshold,
+                sell_threshold=sell_threshold,
+            )
+            dataset["instrument"] = symbol
+            dataset = dataset.dropna(subset=["future_close"]).copy()
+            if not dataset.empty:
+                parts.append(dataset)
+        except Exception as _sym_exc:
+            _btf_logger.warning(
+                "ml_lab.build_training_frame.symbol_skipped symbol=%s error=%s",
+                symbol,
+                " ".join(str(_sym_exc).split()) or type(_sym_exc).__name__,
+            )
             continue
-        features = build_feature_frame(raw, instrument=symbol)
-        dataset = create_target_labels(
-            features,
-            horizon_days=horizon_days,
-            buy_threshold=buy_threshold,
-            sell_threshold=sell_threshold,
-        )
-        dataset["instrument"] = symbol
-        dataset = dataset.dropna(subset=["future_close"]).copy()
-        if not dataset.empty:
-            parts.append(dataset)
     if not parts:
         return pd.DataFrame()
     combined = pd.concat(parts, ignore_index=True)
@@ -82,7 +94,7 @@ def _build_models():
             max_depth=10,
             min_samples_leaf=4,
             random_state=42,
-            n_jobs=1,
+            n_jobs=int(__import__("os").environ.get("MARKET_AI_ML_N_JOBS", "1")),
             class_weight="balanced_subsample",
         ),
         "gradient_boosting": GradientBoostingClassifier(random_state=42),
@@ -137,7 +149,7 @@ def train_baseline_models(
                 max_depth=trial.suggest_int("max_depth", 4, 14),
                 min_samples_leaf=trial.suggest_int("min_samples_leaf", 2, 8),
                 random_state=42,
-                n_jobs=1,
+                n_jobs=int(__import__("os").environ.get("MARKET_AI_ML_N_JOBS", "1")),
                 class_weight="balanced_subsample",
             )
             model.fit(X_train, y_train)
@@ -151,7 +163,7 @@ def train_baseline_models(
             max_depth=params["max_depth"],
             min_samples_leaf=params["min_samples_leaf"],
             random_state=42,
-            n_jobs=1,
+            n_jobs=int(__import__("os").environ.get("MARKET_AI_ML_N_JOBS", "1")),
             class_weight="balanced_subsample",
         )
 

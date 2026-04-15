@@ -88,6 +88,12 @@ ALPACA_URL_OVERRIDE = os.getenv("ALPACA_URL_OVERRIDE", "").strip()
 ALPACA_ACCOUNT_REFRESH_SECONDS = int(os.getenv("MARKET_AI_ALPACA_ACCOUNT_REFRESH_SECONDS", "15"))
 TRAINING_SUBPROCESS_ENABLED = os.getenv("MARKET_AI_TRAINING_SUBPROCESS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 TRAINING_RUNNER_PYTHON = os.getenv("MARKET_AI_TRAINING_RUNNER_PYTHON", sys.executable).strip() or sys.executable
+# Remote GPU worker mode: when enabled, start_training_job() just enqueues in DB
+# (status=queued) without spawning a local subprocess. A remote worker (e.g. laptop
+# with CUDA) polls /api/training/worker/next-job and executes the job. Remote
+# workers authenticate via MARKET_AI_WORKER_TOKEN (shared secret).
+REMOTE_TRAINING_ENABLED = os.getenv("MARKET_AI_REMOTE_TRAINING_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+REMOTE_WORKER_STALE_SECONDS = int(os.getenv("MARKET_AI_REMOTE_WORKER_STALE_SECONDS", "300"))
 CONTINUOUS_LEARNING_RUNNER_PYTHON = os.getenv("MARKET_AI_CONTINUOUS_LEARNING_RUNNER_PYTHON", sys.executable).strip() or sys.executable
 AUTOMATION_DEFAULT_PRESET = os.getenv("MARKET_AI_AUTOMATION_DEFAULT_PRESET", "ALL_US_EQUITIES").strip().upper()
 AUTOMATION_SYMBOL_LIMIT = int(os.getenv("MARKET_AI_AUTOMATION_SYMBOL_LIMIT", "40"))
@@ -116,8 +122,8 @@ CONTINUOUS_LEARNING_EVALUATION_SYMBOLS = int(os.getenv("MARKET_AI_CONTINUOUS_LEA
 CONTINUOUS_LEARNING_POLICY_LOOKBACK_DAYS = int(os.getenv("MARKET_AI_CONTINUOUS_LEARNING_POLICY_LOOKBACK_DAYS", "60"))
 AUTOMATION_DAILY_SUMMARY_HOUR = int(os.getenv("MARKET_AI_DAILY_SUMMARY_HOUR_UTC", "21"))
 RISK_DEFAULT_PORTFOLIO_VALUE = float(os.getenv("MARKET_AI_RISK_DEFAULT_PORTFOLIO_VALUE", "100000"))
-RISK_MAX_TRADE_PCT = float(os.getenv("MARKET_AI_RISK_MAX_TRADE_PCT", "1.0"))
-RISK_MAX_DAILY_LOSS_PCT = float(os.getenv("MARKET_AI_RISK_MAX_DAILY_LOSS_PCT", "2.5"))
+RISK_MAX_TRADE_PCT = float(os.getenv("MARKET_AI_RISK_MAX_TRADE_PCT", "10.0"))
+RISK_MAX_DAILY_LOSS_PCT = float(os.getenv("MARKET_AI_RISK_MAX_DAILY_LOSS_PCT", "15.0"))
 RISK_DEFAULT_STOP_PCT = float(os.getenv("MARKET_AI_RISK_DEFAULT_STOP_PCT", "3.0"))
 RISK_DEFAULT_TARGET_PCT = float(os.getenv("MARKET_AI_RISK_DEFAULT_TARGET_PCT", "6.0"))
 # Paper trading realism model
@@ -201,3 +207,8 @@ TRAINING_JOB_STALE_PENDING_SECONDS = max(30, int(os.getenv("MARKET_AI_TRAINING_J
 
 OPS_LOGS_DIR = LOGS_DIR
 OPS_BACKUPS_DIR = BACKUPS_DIR
+
+# --- Auto Trading ---
+AUTO_TRADING_ENABLED = os.getenv("MARKET_AI_AUTO_TRADING_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
+AUTO_TRADING_CYCLE_MINUTES = int(os.getenv("MARKET_AI_AUTO_TRADING_CYCLE_MINUTES", "30"))
+AUTO_TRADING_QUANTITY = float(os.getenv("MARKET_AI_AUTO_TRADING_QUANTITY", "1"))

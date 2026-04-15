@@ -15,9 +15,19 @@ except Exception:  # pragma: no cover - optional dependency
     TradingClient = None
 
 try:
-    from alpaca.trading.requests import GetOrdersRequest
+    from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopOrderRequest, StopLimitOrderRequest
 except Exception:  # pragma: no cover - optional dependency
     GetOrdersRequest = None
+    MarketOrderRequest = None
+    LimitOrderRequest = None
+    StopOrderRequest = None
+    StopLimitOrderRequest = None
+
+try:
+    from alpaca.trading.enums import OrderSide, TimeInForce
+except Exception:  # pragma: no cover - optional dependency
+    OrderSide = None
+    TimeInForce = None
 
 try:
     from alpaca.trading.enums import QueryOrderStatus
@@ -37,10 +47,17 @@ def _coerce_text(value: Any) -> str | None:
     return text or None
 
 
+def _enum_text(value: Any) -> str | None:
+    text = _coerce_text(value)
+    if not text:
+        return None
+    return text.split(".")[-1].strip() or None
+
+
 def _serialize_account(account: Any) -> dict:
     return {
         "account_id": _coerce_text(getattr(account, "id", None)),
-        "status": _coerce_text(getattr(account, "status", None)),
+        "status": _enum_text(getattr(account, "status", None)),
         "currency": _coerce_text(getattr(account, "currency", None)),
         "equity": _safe_float(getattr(account, "equity", None)),
         "cash": _safe_float(getattr(account, "cash", None)),
@@ -77,9 +94,9 @@ def _serialize_order(order: Any) -> dict:
         "id": _coerce_text(getattr(order, "id", None)),
         "client_order_id": _coerce_text(getattr(order, "client_order_id", None)),
         "symbol": _coerce_text(getattr(order, "symbol", None)),
-        "side": _coerce_text(getattr(order, "side", None)),
-        "type": _coerce_text(getattr(order, "order_type", None)),
-        "status": _coerce_text(getattr(order, "status", None)),
+        "side": _enum_text(getattr(order, "side", None)),
+        "type": _enum_text(getattr(order, "order_type", None)),
+        "status": _enum_text(getattr(order, "status", None)),
         "qty": _safe_float(getattr(order, "qty", None)),
         "filled_qty": _safe_float(getattr(order, "filled_qty", None)),
         "filled_avg_price": _safe_float(getattr(order, "filled_avg_price", None)),
@@ -269,6 +286,82 @@ class AlpacaBrokerProvider(BrokerProvider):
                 "items": [],
                 "count": 0,
             }
+
+    def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
+                     time_in_force: str = "day", limit_price: float | None = None,
+                     stop_price: float | None = None, take_profit_price: float | None = None,
+                     stop_loss_price: float | None = None) -> dict:
+        """Submit an order to Alpaca paper/live account."""
+        client, status = self._client()
+        if client is None:
+            return {"ok": False, "error": status.get("detail", "Cannot connect to Alpaca"), "order": None}
+
+        config = get_alpaca_runtime_config()
+        if not config.get("order_submission_enabled", False):
+            return {"ok": False, "error": "Order submission is disabled in settings.", "order": None}
+
+        if OrderSide is None or TimeInForce is None:
+            return {"ok": False, "error": "alpaca-py SDK order classes not available.", "order": None}
+
+        try:
+            order_side = OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL
+            tif = TimeInForce.DAY if time_in_force.lower() == "day" else TimeInForce.GTC
+
+            if order_type.lower() == "limit" and limit_price and LimitOrderRequest:
+                order_data = LimitOrderRequest(
+                    symbol=symbol.upper(), qty=qty, side=order_side,
+                    time_in_force=tif, limit_price=limit_price,
+                )
+            elif order_type.lower() == "stop" and stop_price and StopOrderRequest:
+                order_data = StopOrderRequest(
+                    symbol=symbol.upper(), qty=qty, side=order_side,
+                    time_in_force=tif, stop_price=stop_price,
+                )
+            elif order_type.lower() == "stop_limit" and stop_price and limit_price and StopLimitOrderRequest:
+                order_data = StopLimitOrderRequest(
+                    symbol=symbol.upper(), qty=qty, side=order_side,
+                    time_in_force=tif, stop_price=stop_price, limit_price=limit_price,
+                )
+            else:
+                if MarketOrderRequest is None:
+                    return {"ok": False, "error": "alpaca-py MarketOrderRequest not available.", "order": None}
+                order_data = MarketOrderRequest(
+                    symbol=symbol.upper(), qty=qty, side=order_side,
+                    time_in_force=tif,
+                )
+
+            order = client.submit_order(order_data)
+            serialized = _serialize_order(order)
+            log_event(
+                logger, logging.INFO, "broker.alpaca.order_submitted",
+                symbol=symbol, side=side, qty=qty, order_type=order_type,
+                order_id=serialized.get("id"), mode=self._mode(config),
+            )
+            # Invalidate orders cache
+            cache = get_cache()
+            cache.delete("broker:alpaca:orders")
+            cache.delete("broker:alpaca:positions")
+
+            return {"ok": True, "error": None, "order": serialized, "mode": self._mode(config)}
+
+        except Exception as exc:
+            self._log_request_failure("submit_order", exc)
+            return {"ok": False, "error": f"Order submission failed: {self._summarize_exception(exc)}", "order": None}
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel an order on Alpaca."""
+        client, status = self._client()
+        if client is None:
+            return {"ok": False, "error": status.get("detail", "Cannot connect to Alpaca")}
+        try:
+            client.cancel_order_by_id(order_id)
+            cache = get_cache()
+            cache.delete("broker:alpaca:orders")
+            log_event(logger, logging.INFO, "broker.alpaca.order_cancelled", order_id=order_id)
+            return {"ok": True, "error": None}
+        except Exception as exc:
+            self._log_request_failure("cancel_order", exc)
+            return {"ok": False, "error": f"Cancel failed: {self._summarize_exception(exc)}"}
 
     def get_summary(self, refresh: bool = False) -> dict:
         account_payload = self.get_account(refresh=refresh)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from backend.app.config import (
     RISK_DEFAULT_PORTFOLIO_VALUE,
     RISK_DEFAULT_STOP_PCT,
@@ -117,7 +119,7 @@ def check_execution_risk(
 
 def get_risk_dashboard(portfolio_value: float = RISK_DEFAULT_PORTFOLIO_VALUE) -> dict:
     # Local import to avoid circular dependency: risk_engine → portfolio_intelligence → portfolio/service → execution/service → risk_engine
-    from backend.app.services.portfolio_intelligence import get_portfolio_exposure  # noqa: PLC0415
+    from backend.app.application.portfolio.service import get_portfolio_exposure  # noqa: PLC0415
     exposure = get_portfolio_exposure()
     summary = exposure.get("summary", {})
     alerts = list(exposure.get("warnings", []))
@@ -136,3 +138,103 @@ def get_risk_dashboard(portfolio_value: float = RISK_DEFAULT_PORTFOLIO_VALUE) ->
         "portfolio_summary": summary,
         "portfolio_warnings": alerts,
     }
+
+
+# --- Trailing Stop Loss ---
+
+DEFAULT_TRAILING_STOP_PCT = float(os.getenv("MARKET_AI_TRAILING_STOP_PCT", "5.0"))
+
+
+def compute_trailing_stop(
+    side: str,
+    current_price: float,
+    high_water_mark: float | None,
+    trailing_stop_pct: float = DEFAULT_TRAILING_STOP_PCT,
+    existing_trailing_stop: float | None = None,
+) -> dict:
+    """Compute trailing stop price for a position.
+
+    For LONG: stop trails below the highest price seen.
+    For SHORT: stop trails above the lowest price seen.
+
+    Returns:
+        {
+            "trailing_stop_price": float,   - current stop level
+            "high_water_mark": float,       - best price seen
+            "triggered": bool,              - True if stop hit
+            "distance_pct": float,          - how far price is from stop
+        }
+    """
+    price = float(current_price or 0.0)
+    pct = max(float(trailing_stop_pct or DEFAULT_TRAILING_STOP_PCT), 0.1)
+
+    if side.upper() == "LONG":
+        # Track highest price
+        hwm = max(price, float(high_water_mark or price))
+        stop = round(hwm * (1 - pct / 100.0), 4)
+        # Never lower the stop
+        if existing_trailing_stop and existing_trailing_stop > stop:
+            stop = existing_trailing_stop
+        triggered = price <= stop
+        distance = round((price - stop) / price * 100, 2) if price > 0 else 0
+    else:
+        # SHORT: track lowest price
+        hwm = min(price, float(high_water_mark or price)) if high_water_mark else price
+        stop = round(hwm * (1 + pct / 100.0), 4)
+        # Never raise the stop for shorts
+        if existing_trailing_stop and existing_trailing_stop < stop:
+            stop = existing_trailing_stop
+        triggered = price >= stop
+        distance = round((stop - price) / price * 100, 2) if price > 0 else 0
+
+    return {
+        "trailing_stop_price": stop,
+        "high_water_mark": hwm,
+        "triggered": triggered,
+        "distance_pct": distance,
+        "trailing_stop_pct": pct,
+    }
+
+
+def evaluate_positions_trailing_stops(positions: list[dict], quotes: dict[str, float]) -> list[dict]:
+    """Evaluate trailing stops for all open positions.
+
+    Args:
+        positions: list of position dicts with symbol, side, trailing_stop_pct, etc.
+        quotes: {symbol: current_price} lookup
+
+    Returns:
+        list of triggered positions with close recommendations
+    """
+    triggered = []
+    for pos in positions:
+        symbol = pos.get("symbol", "")
+        current_price = quotes.get(symbol, pos.get("current_price", 0))
+        if not current_price or current_price <= 0:
+            continue
+
+        trailing_pct = pos.get("trailing_stop_pct")
+        if not trailing_pct:
+            trailing_pct = DEFAULT_TRAILING_STOP_PCT
+
+        result = compute_trailing_stop(
+            side=pos.get("side", "LONG"),
+            current_price=current_price,
+            high_water_mark=pos.get("high_water_mark"),
+            trailing_stop_pct=trailing_pct,
+            existing_trailing_stop=pos.get("trailing_stop_price"),
+        )
+
+        if result["triggered"]:
+            entry = float(pos.get("avg_entry_price", 0))
+            sign = 1 if pos.get("side") == "LONG" else -1
+            pnl = round((current_price - entry) * float(pos.get("quantity", 0)) * sign, 2)
+            triggered.append({
+                **pos,
+                "current_price": current_price,
+                "trailing_stop": result,
+                "realized_pnl_estimate": pnl,
+                "action": "CLOSE",
+            })
+
+    return triggered

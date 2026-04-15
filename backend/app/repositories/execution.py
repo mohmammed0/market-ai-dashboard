@@ -138,6 +138,10 @@ class ExecutionRepository:
         realized_pnl: float,
         status: str = "OPEN",
         opened_at: datetime | None = None,
+        stop_loss_price: float | None = None,
+        trailing_stop_pct: float | None = None,
+        trailing_stop_price: float | None = None,
+        high_water_mark: float | None = None,
     ) -> PositionState:
         row = self.get_open_position_row(symbol, strategy_mode)
         if row is None:
@@ -157,6 +161,14 @@ class ExecutionRepository:
         row.realized_pnl = realized_pnl
         row.status = status
         row.updated_at = datetime.utcnow()
+        if stop_loss_price is not None:
+            row.stop_loss_price = stop_loss_price
+        if trailing_stop_pct is not None:
+            row.trailing_stop_pct = trailing_stop_pct
+        if trailing_stop_price is not None:
+            row.trailing_stop_price = trailing_stop_price
+        if high_water_mark is not None:
+            row.high_water_mark = high_water_mark
         self.session.flush()
         return _serialize_position(row)
 

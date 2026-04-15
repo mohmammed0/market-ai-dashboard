@@ -14,6 +14,10 @@ import {
   fetchAiStatus,
   saveAlpacaSettings,
   testAlpacaSettings,
+  fetchTelegramStatus,
+  saveTelegramSettings,
+  testTelegramConnection,
+  fetchAutoTradingConfig,
 } from "../lib/api";
 
 
@@ -38,15 +42,27 @@ export default function SettingsPage() {
   const [alpacaMsg, setAlpacaMsg] = useState("");
   const [savingAlpaca, setSavingAlpaca] = useState(false);
   const [testingAlpaca, setTestingAlpaca] = useState(false);
-  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, apiKey: "", secretKey: "", urlOverride: "" });
+  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false });
+
+  // Telegram state
+  const [telegramForm, setTelegramForm] = useState({ botToken: "", chatId: "" });
+  const [telegramStatus, setTelegramStatus] = useState(null);
+  const [telegramMsg, setTelegramMsg] = useState("");
+  const [savingTelegram, setSavingTelegram] = useState(false);
+  const [testingTelegram, setTestingTelegram] = useState(false);
+
+  // Auto-trading status
+  const [autoTradingInfo, setAutoTradingInfo] = useState(null);
 
   useEffect(() => {
     if (!runtimeSettings) return;
-    setAlpacaForm({ enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled), paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true), apiKey: "", secretKey: "", urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "" });
+    setAlpacaForm({ enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled), paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true), apiKey: "", secretKey: "", urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "", autoTrading: Boolean(runtimeSettings?.broker?.auto_trading_enabled), orderSubmission: Boolean(runtimeSettings?.broker?.order_submission_enabled) });
   }, [runtimeSettings]);
 
   useEffect(() => {
     fetchAiStatus().then(setLlmStatus).catch(() => {});
+    fetchTelegramStatus().then(setTelegramStatus).catch(() => {});
+    fetchAutoTradingConfig().then(setAutoTradingInfo).catch(() => {});
   }, []);
 
   async function handleTestLlm() {
@@ -62,17 +78,41 @@ export default function SettingsPage() {
   async function handleSaveAlpaca() {
     setSavingAlpaca(true); setAlpacaMsg("");
     try {
-      const r = await saveAlpacaSettings({ enabled: alpacaForm.enabled, provider: "alpaca", paper: alpacaForm.paper, api_key: alpacaForm.apiKey || undefined, secret_key: alpacaForm.secretKey || undefined, url_override: alpacaForm.urlOverride });
-      setAlpacaMsg(r.detail || "Saved."); setAlpacaForm((p) => ({ ...p, apiKey: "", secretKey: "" })); await refreshData();
-    } catch (e) { setAlpacaMsg(e.message || "Save failed."); }
+      const r = await saveAlpacaSettings({ enabled: alpacaForm.enabled, provider: "alpaca", paper: alpacaForm.paper, api_key: alpacaForm.apiKey || undefined, secret_key: alpacaForm.secretKey || undefined, url_override: alpacaForm.urlOverride, auto_trading_enabled: alpacaForm.autoTrading, order_submission_enabled: alpacaForm.orderSubmission });
+      setAlpacaMsg(r.detail || "تم الحفظ بنجاح"); setAlpacaForm((p) => ({ ...p, apiKey: "", secretKey: "" })); await refreshData();
+      fetchAutoTradingConfig().then(setAutoTradingInfo).catch(() => {});
+    } catch (e) { setAlpacaMsg(e.message || "فشل الحفظ"); }
     finally { setSavingAlpaca(false); }
   }
 
   async function handleTestAlpaca() {
     setTestingAlpaca(true); setAlpacaMsg("");
-    try { const r = await testAlpacaSettings(); setAlpacaMsg(r.detail || (r.ok ? "Test passed." : "Test failed.")); }
-    catch (e) { setAlpacaMsg(e.message || "Test failed."); }
+    try { const r = await testAlpacaSettings(); setAlpacaMsg(r.detail || (r.ok ? "اختبار ناجح" : "فشل الاختبار")); }
+    catch (e) { setAlpacaMsg(e.message || "فشل الاختبار"); }
     finally { setTestingAlpaca(false); }
+  }
+
+  async function handleSaveTelegram() {
+    setSavingTelegram(true); setTelegramMsg("");
+    try {
+      const r = await saveTelegramSettings({
+        bot_token: telegramForm.botToken,
+        chat_id: telegramForm.chatId,
+      });
+      setTelegramMsg(r.detail || "تم حفظ اعدادات تيليجرام بنجاح");
+      setTelegramForm({ botToken: "", chatId: "" });
+      fetchTelegramStatus().then(setTelegramStatus).catch(() => {});
+    } catch (e) { setTelegramMsg(e.message || "فشل حفظ اعدادات تيليجرام"); }
+    finally { setSavingTelegram(false); }
+  }
+
+  async function handleTestTelegram() {
+    setTestingTelegram(true); setTelegramMsg("");
+    try {
+      const r = await testTelegramConnection();
+      setTelegramMsg(r.detail || (r.ok ? "تم ارسال رسالة تجريبية بنجاح" : "فشل ارسال الرسالة"));
+    } catch (e) { setTelegramMsg(e.message || "فشل ارسال الرسالة التجريبية"); }
+    finally { setTestingTelegram(false); }
   }
 
   const controlPlane = runtimeSettings?.control_plane;
@@ -95,8 +135,8 @@ export default function SettingsPage() {
 
   return (
     <PageFrame
-      title="الإعدادات"
-      description="حالة المنصة، إعدادات الذكاء، والوسيط."
+      title="الاعدادات"
+      description="حالة المنصة، اعدادات الذكاء، الوسيط، والاشعارات."
       eyebrow="النظام"
       headerActions={
         <>
@@ -124,9 +164,35 @@ export default function SettingsPage() {
         )}
       </SectionCard>
 
+      {/* Auto-Trading Status Banner */}
+      {autoTradingInfo && (
+        <div style={{
+          background: autoTradingInfo.ready ? "rgba(8,153,129,0.08)" : "rgba(255,152,0,0.08)",
+          border: `1px solid ${autoTradingInfo.ready ? "rgba(8,153,129,0.3)" : "rgba(255,152,0,0.3)"}`,
+          borderRadius: 8, padding: 16, marginBottom: 8,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{
+                width: 10, height: 10, borderRadius: "50%",
+                background: autoTradingInfo.ready ? "#089981" : "#FF9800",
+              }} />
+              <span style={{ fontWeight: 700, color: "var(--tv-text)", fontSize: 14 }}>
+                التداول التلقائي: {autoTradingInfo.auto_trading_enabled ? (autoTradingInfo.ready ? "جاهز ونشط" : "مفعل (غير مكتمل)") : "معطل"}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--tv-text-muted)" }}>
+              <span>Alpaca: {autoTradingInfo.alpaca_configured ? "مفعل" : "غير مفعل"}</span>
+              <span>الاوامر: {autoTradingInfo.order_submission_enabled ? "مفعل" : "معطل"}</span>
+              <span>الوضع: {autoTradingInfo.alpaca_paper ? "ورقي" : "حقيقي"}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="command-grid">
         {/* Runtime Info */}
-        <SectionCard className="col-span-6" title="Runtime" description="أدوار التشغيل والبيئة.">
+        <SectionCard className="col-span-6" title="Runtime" description="ادوار التشغيل والبيئة.">
           {settingsLoading ? <LoadingSkeleton lines={3} /> : (
             <div className="settings-group">
               <div className="settings-row">
@@ -157,7 +223,7 @@ export default function SettingsPage() {
         <SectionCard className="col-span-6" title="Ollama / AI" description="حالة محرك الذكاء الاصطناعي المحلي.">
           <div className="settings-group">
             <div className="settings-row">
-              <span className="settings-row-label">المزوّد النشط</span>
+              <span className="settings-row-label">المزود النشط</span>
               <span className="settings-row-value">{llmStatus?.active_provider || "-"}</span>
             </div>
             <div className="settings-row">
@@ -180,10 +246,10 @@ export default function SettingsPage() {
         </SectionCard>
 
         {/* Alpaca Broker */}
-        <SectionCard className="col-span-6" title="Alpaca Broker" description="إعدادات وسيط التداول.">
+        <SectionCard className="col-span-6" title="Alpaca Broker" description="اعدادات وسيط التداول.">
           <div className="settings-group">
             <div className="settings-row">
-              <span className="settings-row-label">مفعّل</span>
+              <span className="settings-row-label">مفعل</span>
               <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                 <input type="checkbox" checked={alpacaForm.enabled} onChange={(e) => setAlpacaForm((p) => ({ ...p, enabled: e.target.checked }))} />
                 <span className="text-sm">{alpacaForm.enabled ? "نعم" : "لا"}</span>
@@ -204,6 +270,25 @@ export default function SettingsPage() {
               <span className="settings-row-label">Secret Key</span>
               <input className="form-input" style={{ width: "220px" }} type="password" placeholder="..." value={alpacaForm.secretKey} onChange={(e) => setAlpacaForm((p) => ({ ...p, secretKey: e.target.value }))} />
             </div>
+            <div className="settings-row" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-3)", marginTop: "var(--space-2)" }}>
+              <span className="settings-row-label" style={{ fontWeight: 600 }}>Order Submission</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <input type="checkbox" checked={alpacaForm.orderSubmission} onChange={(e) => setAlpacaForm((p) => ({ ...p, orderSubmission: e.target.checked }))} />
+                <span className="text-sm">{alpacaForm.orderSubmission ? "مفعل" : "معطل"}</span>
+              </label>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label" style={{ fontWeight: 600, color: "var(--accent-primary)" }}>التداول التلقائي</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <input type="checkbox" checked={alpacaForm.autoTrading} onChange={(e) => setAlpacaForm((p) => ({ ...p, autoTrading: e.target.checked }))} />
+                <span className="text-sm" style={{ color: alpacaForm.autoTrading ? "var(--accent-success)" : "inherit" }}>{alpacaForm.autoTrading ? "مفعل" : "معطل"}</span>
+              </label>
+            </div>
+            {alpacaForm.autoTrading && (
+              <div className="info-banner" style={{ background: "var(--surface-success, #e8f5e9)", borderRadius: 8, padding: "var(--space-2) var(--space-3)" }}>
+                التداول التلقائي مفعل — النظام سيحلل السوق كل 30 دقيقة وينفذ اوامر الشراء تلقائيا على الفرص المكتشفة في البيئة التجريبية
+              </div>
+            )}
             {alpacaMsg && <div className="info-banner">{alpacaMsg}</div>}
             <div className="form-actions">
               <button className="btn btn-primary btn-sm" onClick={handleSaveAlpaca} disabled={savingAlpaca}>{savingAlpaca ? "..." : "حفظ"}</button>
@@ -212,8 +297,70 @@ export default function SettingsPage() {
           </div>
         </SectionCard>
 
+        {/* Telegram Notifications */}
+        <SectionCard className="col-span-6" title="اشعارات تيليجرام" description="ربط بوت تيليجرام لاستقبال اشعارات التداول والتنبيهات.">
+          <div className="settings-group">
+            <div className="settings-row">
+              <span className="settings-row-label">الحالة</span>
+              <StatusBadge
+                label={telegramStatus?.configured ? "متصل" : "غير مفعل"}
+                tone={telegramStatus?.configured ? "positive" : "neutral"}
+              />
+            </div>
+            {telegramStatus?.configured && (
+              <div className="settings-row">
+                <span className="settings-row-label">Bot</span>
+                <span className="settings-row-value" style={{ fontSize: 12 }}>{telegramStatus?.bot_username || "متصل"}</span>
+              </div>
+            )}
+            <div className="settings-row">
+              <span className="settings-row-label">Bot Token</span>
+              <input
+                className="form-input"
+                style={{ width: "280px" }}
+                type="password"
+                placeholder="123456:ABC-DEF..."
+                value={telegramForm.botToken}
+                onChange={(e) => setTelegramForm((p) => ({ ...p, botToken: e.target.value }))}
+              />
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">Chat ID</span>
+              <input
+                className="form-input"
+                style={{ width: "180px" }}
+                type="text"
+                placeholder="-100123456789"
+                value={telegramForm.chatId}
+                onChange={(e) => setTelegramForm((p) => ({ ...p, chatId: e.target.value }))}
+              />
+            </div>
+
+            <div className="info-banner" style={{ background: "var(--surface-info, rgba(33,150,243,0.08))", borderRadius: 8, padding: "var(--space-2) var(--space-3)", fontSize: 12, lineHeight: 1.8 }}>
+              <strong>انواع الاشعارات:</strong><br />
+              1. اشارات التداول الجديدة<br />
+              2. تنفيذ الاوامر على Alpaca<br />
+              3. تفعيل وقف الخسارة المتحرك<br />
+              4. ملخص التداول التلقائي<br />
+              5. ملخص يومي للمحفظة<br />
+              6. اشعار فتح السوق<br />
+              7. تنبيهات الاسهم
+            </div>
+
+            {telegramMsg && <div className="info-banner">{telegramMsg}</div>}
+            <div className="form-actions">
+              <button className="btn btn-primary btn-sm" onClick={handleSaveTelegram} disabled={savingTelegram}>
+                {savingTelegram ? "..." : "حفظ"}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={handleTestTelegram} disabled={testingTelegram || !telegramStatus?.configured}>
+                {testingTelegram ? "..." : "ارسال رسالة تجريبية"}
+              </button>
+            </div>
+          </div>
+        </SectionCard>
+
         {/* Jobs */}
-        <SectionCard className="col-span-6" title="Background Jobs" description="آخر الوظائف الخلفية.">
+        <SectionCard className="col-span-6" title="Background Jobs" description="اخر الوظائف الخلفية.">
           <SummaryStrip compact items={[
             { label: "Running", value: jobCounts.running, tone: jobCounts.running ? "warning" : "neutral" },
             { label: "Pending", value: jobCounts.pending },
@@ -224,6 +371,27 @@ export default function SettingsPage() {
             {jobsLoading ? <LoadingSkeleton lines={3} /> : (
               <DataTable columns={jobColumns} data={recentJobs} emptyTitle="لا توجد وظائف" compact />
             )}
+          </div>
+        </SectionCard>
+
+        {/* Trailing Stop Config */}
+        <SectionCard className="col-span-6" title="وقف الخسارة المتحرك" description="اعدادات الوقف التلقائي للمراكز المفتوحة.">
+          <div className="settings-group">
+            <div className="settings-row">
+              <span className="settings-row-label">النسبة الافتراضية</span>
+              <span className="settings-row-value" style={{ fontWeight: 700, color: "#FF9800" }}>5.0%</span>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">فترة المراقبة</span>
+              <span className="settings-row-value">كل 5 دقائق</span>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">الية العمل</span>
+              <span className="settings-row-value" style={{ fontSize: 12 }}>يتتبع اعلى سعر — عند انخفاض 5% من القمة يغلق المركز تلقائيا</span>
+            </div>
+            <div className="info-banner" style={{ background: "rgba(255,152,0,0.08)", borderRadius: 8, padding: "var(--space-2) var(--space-3)", fontSize: 12 }}>
+              وقف الخسارة المتحرك يعمل تلقائيا على كل المراكز الجديدة — يتم فحص الاسعار كل 5 دقائق، واذا انخفض السعر 5% من اعلى نقطة وصلها يتم اغلاق المركز وارسال اشعار تيليجرام
+            </div>
           </div>
         </SectionCard>
       </div>

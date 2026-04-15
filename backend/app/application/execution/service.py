@@ -27,6 +27,49 @@ from backend.app.services.risk_engine import check_execution_risk
 from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
 from backend.app.services.storage import session_scope
 
+# Broker integration for live order submission
+def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market") -> dict | None:
+    """Submit order to broker (Alpaca) if configured and enabled."""
+    try:
+        from backend.app.services.runtime_settings import get_auto_trading_config
+        config = get_auto_trading_config()
+        if not config.get("ready", False):
+            return None
+
+        from backend.app.services.broker.registry import get_broker_provider
+        broker = get_broker_provider()
+        result = broker.submit_order(symbol=symbol, qty=qty, side=side, order_type=order_type)
+
+        if result.get("ok"):
+            # Send Telegram notification
+            _notify_trade(symbol, qty, side, result.get("order", {}))
+
+        return result
+    except Exception as exc:
+        log_event(logger, logging.WARNING, "execution.broker_submit.failed",
+                  symbol=symbol, side=side, qty=qty, error=str(exc))
+        return {"ok": False, "error": str(exc)}
+
+
+def _notify_trade(symbol: str, qty: float, side: str, order: dict):
+    """Send Telegram notification for executed trade."""
+    try:
+        from core.telegram_notifier import send_telegram_message, is_telegram_configured
+        if not is_telegram_configured():
+            return
+        emoji = "🟢" if side.upper() == "BUY" else "🔴"
+        mode = order.get("mode", "paper")
+        msg = (
+            f"{emoji} <b>تنفيذ {side.upper()}</b>\n"
+            f"📊 السهم: <b>{symbol}</b>\n"
+            f"📦 الكمية: {qty}\n"
+            f"💰 الوضع: {mode}\n"
+            f"🆔 Order: {order.get('id', 'N/A')}"
+        )
+        send_telegram_message(msg)
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # In-memory preview store (TTL = 5 minutes)
 # ---------------------------------------------------------------------------
@@ -201,44 +244,65 @@ def _apply_trade_intent(
             action="CLOSE", side=current_row.side, quantity=close_qty,
             price=fill_price, realized_pnl=realized, notes=fill_notes,
         ))
+        # Submit SELL to Alpaca broker
+        broker_side = "SELL" if intent.intent == "CLOSE_LONG" else "BUY"
+        broker_result = _submit_to_broker(intent.symbol, close_qty, broker_side)
+        broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
             event_type=intent.intent.lower(), symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": close_qty, "realized_pnl": realized, "fill": fill_audit},
+            payload={"price": fill_price, "quantity": close_qty, "realized_pnl": realized, "fill": fill_audit, "broker": broker_info},
         ))
     elif intent.intent == "OPEN_LONG":
+        # Set trailing stop on new position
+        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
+        trailing_pct = DEFAULT_TRAILING_STOP_PCT
+        trailing_stop = round(fill_price * (1 - trailing_pct / 100.0), 4)
         repo.upsert_position(
             symbol=intent.symbol, strategy_mode=intent.strategy_mode,
             side="LONG", quantity=fill_qty, avg_entry_price=fill_price,
             current_price=fill_price, market_value=round(fill_price * fill_qty, 4),
             unrealized_pnl=0.0, realized_pnl=0.0, status="OPEN",
+            trailing_stop_pct=trailing_pct, trailing_stop_price=trailing_stop,
+            high_water_mark=fill_price, stop_loss_price=trailing_stop,
         )
         repo.append_trade(TradeRecord(
             symbol=intent.symbol, strategy_mode=intent.strategy_mode,
             action="OPEN", side="LONG", quantity=fill_qty,
             price=fill_price, realized_pnl=0.0, notes=fill_notes,
         ))
+        # Submit to Alpaca broker
+        broker_result = _submit_to_broker(intent.symbol, fill_qty, "BUY")
+        broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
             event_type="open_long", symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit},
+            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
         ))
     elif intent.intent == "OPEN_SHORT":
+        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
+        trailing_pct = DEFAULT_TRAILING_STOP_PCT
+        trailing_stop = round(fill_price * (1 + trailing_pct / 100.0), 4)
         repo.upsert_position(
             symbol=intent.symbol, strategy_mode=intent.strategy_mode,
             side="SHORT", quantity=fill_qty, avg_entry_price=fill_price,
             current_price=fill_price, market_value=round(fill_price * fill_qty, 4),
             unrealized_pnl=0.0, realized_pnl=0.0, status="OPEN",
+            trailing_stop_pct=trailing_pct, trailing_stop_price=trailing_stop,
+            high_water_mark=fill_price, stop_loss_price=trailing_stop,
         )
         repo.append_trade(TradeRecord(
             symbol=intent.symbol, strategy_mode=intent.strategy_mode,
             action="OPEN", side="SHORT", quantity=fill_qty,
             price=fill_price, realized_pnl=0.0, notes=fill_notes,
         ))
+        # Submit to Alpaca broker
+        broker_result = _submit_to_broker(intent.symbol, fill_qty, "SELL")
+        broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
             event_type="open_short", symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit},
+            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
         ))
 
 
@@ -347,10 +411,52 @@ def refresh_signals(
 
 
 def get_internal_portfolio(limit: int = 500) -> dict:
+    import os
     with session_scope() as session:
         repo = ExecutionRepository(session)
         items = [position.model_dump(mode="json") for position in repo.list_open_positions()[:limit]]
-    return {"items": items, "summary": {"open_positions": len(items), "total_market_value": round(sum(_safe_float(item.get("market_value")) for item in items), 4), "total_unrealized_pnl": round(sum(_safe_float(item.get("unrealized_pnl")) for item in items), 4), "total_realized_pnl": round(sum(_safe_float(item.get("realized_pnl")) for item in items), 4)}}
+        all_trades = [row.model_dump(mode="json") for row in repo.list_trades(limit=10000)]
+
+    total_market_value = round(sum(_safe_float(item.get("market_value")) for item in items), 4)
+    total_unrealized = round(sum(_safe_float(item.get("unrealized_pnl")) for item in items), 4)
+    total_realized = round(sum(_safe_float(item.get("realized_pnl")) for item in items), 4)
+    invested_cost = round(
+        sum(_safe_float(item.get("avg_entry_price")) * _safe_float(item.get("quantity")) for item in items),
+        4,
+    )
+
+    # Paper-trading wallet model (no broker required):
+    #   starting_cash configurable via MARKET_AI_PAPER_STARTING_CASH (default $100,000)
+    #   cash    = starting_cash + realized_pnl - invested_cost
+    #   equity  = cash + total_market_value
+    starting_cash = _safe_float(os.environ.get("MARKET_AI_PAPER_STARTING_CASH"), default=100_000.0)
+    cash_balance = round(starting_cash + total_realized - invested_cost, 4)
+    total_equity = round(cash_balance + total_market_value, 4)
+
+    # Close/exit trades (CLOSE action) to compute win rate
+    close_trades = [t for t in all_trades if (t.get("action") or "").upper() in {"CLOSE", "CLOSE_LONG", "CLOSE_SHORT", "EXIT"}]
+    wins = sum(1 for t in close_trades if _safe_float(t.get("realized_pnl")) > 0)
+    total_trades_count = len(all_trades)
+    win_rate = round((wins / len(close_trades) * 100.0), 2) if close_trades else None
+
+    summary = {
+        "open_positions": len(items),
+        "total_market_value": total_market_value,
+        "portfolio_value": total_equity,  # frontend "Portfolio Value" should be EQUITY (cash + positions)
+        "starting_cash": starting_cash,
+        "cash_balance": cash_balance,
+        "invested_cost": invested_cost,
+        "total_equity": total_equity,
+        "total_unrealized_pnl": total_unrealized,
+        "total_realized_pnl": total_realized,
+        "total_trades": total_trades_count,
+        "win_rate_pct": win_rate if win_rate is not None else "-",
+    }
+    return {
+        "items": items,
+        "positions": items,  # alias expected by frontend
+        "summary": summary,
+    }
 
 
 def _parse_fill_details_from_notes(notes: str | None) -> dict | None:
@@ -412,10 +518,31 @@ def get_trade_history(limit=100):
         return {"items": [_enrich_with_fill_details(row.model_dump(mode="json")) for row in repo.list_trades(limit=limit)]}
 
 
-def get_signal_history(limit=100):
+def _compact_signal(item: dict) -> dict:
+    """Drop the heavy `payload` blob for list views; keep only a lightweight summary.
+
+    The raw `payload` can exceed 250KB per signal (full indicator snapshots),
+    which balloons list responses to 30MB+ and chokes the browser. Callers that
+    need the full payload can fetch a specific signal by id.
+    """
+    payload = item.get("payload") or {}
+    analysis = payload.get("analysis") if isinstance(payload, dict) else None
+    compact_payload = None
+    if isinstance(analysis, dict):
+        keep = ("close", "rsi14", "macd", "macd_signal", "adx14", "atr14")
+        compact_payload = {"analysis": {k: analysis.get(k) for k in keep if k in analysis}}
+    item = dict(item)
+    item["payload"] = compact_payload
+    return item
+
+
+def get_signal_history(limit=100, *, compact: bool = True):
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        return {"items": [row.model_dump(mode="json") for row in repo.list_signals(limit=limit)]}
+        rows = [row.model_dump(mode="json") for row in repo.list_signals(limit=limit)]
+        if compact:
+            rows = [_compact_signal(r) for r in rows]
+        return {"items": rows, "count": len(rows)}
 
 
 def get_alert_history(limit=100, severity: str | None = None):

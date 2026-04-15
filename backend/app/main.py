@@ -43,6 +43,8 @@ from backend.app.api.routes import (
     stack_status_router,
     strategy_lab_router,
     training_router,
+    training_worker_router,
+    training_jobs_worker_router,
     watchlists_router,
     workspace_router,
     events_router,
@@ -52,6 +54,7 @@ from backend.app.api.routes import (
     position_sizing_router,
     portfolio_risk_router,
     notifications_router,
+    ai_chat_router,
 )
 from backend.app.config import (
     ALLOWED_ORIGINS,
@@ -109,6 +112,21 @@ async def auth_middleware(request: Request, call_next):
     # Public paths that don't need auth
     public_prefixes = ("/auth", "/health", "/docs", "/openapi.json", "/redoc")
     if any(path.startswith(p) for p in public_prefixes):
+        return await call_next(request)
+
+    # Remote training worker endpoints use their own shared-secret Bearer token
+    # (MARKET_AI_WORKER_TOKEN), not user JWTs — bypass the user-auth middleware
+    # so the worker-token check in the router can run.
+    if path.startswith("/api/training/worker"):
+        return await call_next(request)
+    # Worker alias endpoints on the /api/training/jobs/... path. These each
+    # declare Depends(_require_worker_token) in the router, so the worker
+    # token is still validated; we only bypass the JWT layer here.
+    if path == "/api/training/jobs/next-queued":
+        return await call_next(request)
+    if path.startswith("/api/training/jobs/") and (
+        path.endswith("/claim") or path.endswith("/artifact")
+    ):
         return await call_next(request)
 
     # OPTIONS requests for CORS
@@ -269,7 +287,11 @@ app.include_router(readiness_router, prefix="/api")
 app.include_router(smart_automation_router, prefix="/api")
 app.include_router(stack_status_router, prefix="/api")
 app.include_router(strategy_lab_router, prefix="/api")
+# Worker-alias router must be included BEFORE training_router so that
+# `/api/training/jobs/next-queued` is not shadowed by `/api/training/jobs/{job_id}`.
+app.include_router(training_jobs_worker_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
+app.include_router(training_worker_router, prefix="/api")
 app.include_router(watchlists_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
@@ -278,3 +300,4 @@ app.include_router(position_sizing_router, prefix="/api")
 app.include_router(portfolio_risk_router, prefix="/api")
 app.include_router(fundamentals_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
+app.include_router(ai_chat_router, prefix="/api")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from backend.app.services.cached_analysis import get_base_analysis_result
+from backend.app.services.cached_analysis import get_base_analysis_results_batch
 from core.ranking_service import rank_scan_results
 
 
@@ -19,15 +19,15 @@ def safe_service_call(factory, fallback):
 
 def build_sample_scan_snapshot(sample_symbols: list[str]) -> tuple[list[dict], dict | None, dict[str, int]]:
     current_end_date = datetime.utcnow().date().isoformat()
-    sample_rows = []
 
-    for symbol in sample_symbols:
-        try:
-            result = get_base_analysis_result(symbol, "2024-01-01", current_end_date, ttl_seconds=600)
-            if "error" not in result:
-                sample_rows.append(result)
-        except Exception:
-            continue
+    all_results = get_base_analysis_results_batch(
+        sample_symbols,
+        "2024-01-01",
+        current_end_date,
+        ttl_seconds=600,
+        max_workers=4,
+    )
+    sample_rows = [r for r in all_results if "error" not in r]
 
     ranked_rows = rank_scan_results(sample_rows)
     signal_counts = {"BUY": 0, "HOLD": 0, "SELL": 0}

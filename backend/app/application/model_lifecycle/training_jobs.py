@@ -9,6 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from backend.app.config import (
+    REMOTE_TRAINING_ENABLED,
+    REMOTE_WORKER_STALE_SECONDS,
     ROOT_DIR,
     TRAINING_JOB_MAX_ACTIVE,
     TRAINING_JOB_STALE_PENDING_SECONDS,
@@ -51,6 +53,9 @@ def _reconcile_active_training_jobs(repo: ModelLifecycleRepository) -> int:
     changed = 0
     for row in repo.list_active_training_job_rows():
         normalized_status = str(row.status or "").strip().lower()
+        # Remote-claimed jobs (worker_id set) use heartbeat-based timeout, not PID checks.
+        if normalized_status == "running" and getattr(row, "worker_id", None):
+            continue
         if normalized_status == "running" and row.pid and not is_process_running(row.pid):
             repo.mark_training_job_failed(
                 row.job_id,
@@ -59,12 +64,18 @@ def _reconcile_active_training_jobs(repo: ModelLifecycleRepository) -> int:
             )
             changed += 1
         elif normalized_status == "queued" and row.requested_at and row.requested_at <= stale_before:
+            # Remote mode: jobs can sit in queued indefinitely waiting for a worker.
+            # Only time out queued jobs in local-subprocess mode.
+            if REMOTE_TRAINING_ENABLED:
+                continue
             repo.mark_training_job_failed(
                 row.job_id,
                 error_message="Training job launch timed out before the worker started.",
                 result_json=dumps_json({"error": "Training job launch timed out before the worker started."}),
             )
             changed += 1
+    # Heartbeat reconciliation for remote workers (independent of subprocess mode).
+    changed += repo.release_stale_remote_jobs(stale_seconds=REMOTE_WORKER_STALE_SECONDS)
     return changed
 
 
@@ -72,7 +83,7 @@ def start_training_job(*, model_type: str, payload: dict, requested_by: str | No
     normalized_type = str(model_type or "ml").strip().lower()
     if normalized_type not in {"ml", "dl"}:
         raise TrainingJobSubmissionError(f"Unsupported model type: {model_type}")
-    if not TRAINING_SUBPROCESS_ENABLED:
+    if not REMOTE_TRAINING_ENABLED and not TRAINING_SUBPROCESS_ENABLED:
         raise TrainingJobLaunchError("Training subprocess execution is disabled by configuration.")
 
     payload_json = _normalize_training_payload(payload)
@@ -96,12 +107,30 @@ def start_training_job(*, model_type: str, payload: dict, requested_by: str | No
             )
 
         job_id = f"train-{normalized_type}-{uuid4().hex[:12]}"
-        repo.create_training_job(
+        created = repo.create_training_job(
             job_id=job_id,
             model_type=normalized_type,
             payload_json=payload_json,
             requested_by=requested_by,
         )
+
+    # Remote GPU worker mode: just leave the job in 'queued' state; the remote
+    # worker polls /api/training/worker/next-job and executes it there.
+    if REMOTE_TRAINING_ENABLED:
+        log_event(
+            logger,
+            logging.INFO,
+            "training.job.queued_for_remote_worker",
+            job_id=job_id,
+            model_type=normalized_type,
+        )
+        return {
+            "accepted": True,
+            "deduplicated": False,
+            "remote": True,
+            "job": created.model_dump(),
+            "log_path": str(_training_job_log_path(job_id)),
+        }
 
     command = [TRAINING_RUNNER_PYTHON, "-m", "backend.app.workers.training_runner", job_id]
     log_path = _training_job_log_path(job_id)

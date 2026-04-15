@@ -22,7 +22,7 @@ def get_dashboard_summary():
     cache = get_cache()
 
     def build_payload():
-        sample_symbols = DEFAULT_SAMPLE_SYMBOLS
+        sample_symbols = DEFAULT_SAMPLE_SYMBOLS[:4]
         ranked_rows, sample_analyze, signal_counts = build_sample_scan_snapshot(sample_symbols)
 
         return {
@@ -54,4 +54,4 @@ def get_dashboard_summary():
             "cache": get_cache_status(),
         }
 
-    return cache.get_or_set("dashboard:summary", build_payload, ttl_seconds=30)
+    return cache.get_or_set("dashboard:summary", build_payload, ttl_seconds=300)

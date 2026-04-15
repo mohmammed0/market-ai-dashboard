@@ -20,6 +20,10 @@ class PaperPosition(Base):
     unrealized_pnl: Mapped[float | None] = mapped_column(Float)
     realized_pnl: Mapped[float | None] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(20), default="OPEN", index=True)
+    stop_loss_price: Mapped[float | None] = mapped_column(Float)
+    trailing_stop_pct: Mapped[float | None] = mapped_column(Float)
+    trailing_stop_price: Mapped[float | None] = mapped_column(Float)
+    high_water_mark: Mapped[float | None] = mapped_column(Float)
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

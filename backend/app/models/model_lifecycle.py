@@ -69,3 +69,7 @@ class TrainingJob(Base):
     payload_json: Mapped[str | None] = mapped_column(Text)
     result_json: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
+    # Remote GPU worker fields (nullable => local subprocess leaves them unset)
+    worker_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    worker_hostname: Mapped[str | None] = mapped_column(String(255))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)

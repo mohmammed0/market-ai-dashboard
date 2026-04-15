@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from datetime import datetime
@@ -66,6 +67,9 @@ def _serialize_training_job(row: TrainingJob) -> TrainingJobSummary:
         run_id=run_id,
         artifact_path=artifact_path,
         error_message=row.error_message,
+        worker_id=getattr(row, "worker_id", None),
+        worker_hostname=getattr(row, "worker_hostname", None),
+        heartbeat_at=row.heartbeat_at.isoformat() if getattr(row, "heartbeat_at", None) else None,
     )
 
 
@@ -191,3 +195,146 @@ class ModelLifecycleRepository:
             row.result_json = result_json
         self.session.flush()
         return _serialize_training_job(row)
+
+    # ── Remote-worker methods ──────────────────────────────────────────────
+
+    def claim_next_queued_job(
+        self,
+        *,
+        worker_id: str,
+        worker_hostname: str | None,
+        model_type: str | None = None,
+    ) -> TrainingJobSummary | None:
+        """Atomically claim the oldest queued training job for a remote worker.
+
+        Uses FOR UPDATE SKIP LOCKED so parallel workers don't race. Falls back
+        to a non-locking query when the DB dialect doesn't support SKIP LOCKED
+        (e.g. SQLite in tests), which is safe under the single-worker setup.
+        """
+        dialect = self.session.bind.dialect.name if self.session.bind else ""
+        base_sql = (
+            "SELECT id FROM training_jobs WHERE status = 'queued'"
+        )
+        if model_type:
+            base_sql += " AND model_type = :mt"
+        base_sql += " ORDER BY requested_at ASC, id ASC LIMIT 1"
+        if dialect == "postgresql":
+            base_sql += " FOR UPDATE SKIP LOCKED"
+
+        params = {}
+        if model_type:
+            params["mt"] = str(model_type).strip().lower()
+
+        result = self.session.execute(text(base_sql), params).fetchone()
+        if result is None:
+            return None
+        row = self.session.query(TrainingJob).filter(TrainingJob.id == result[0]).first()
+        if row is None or row.status != "queued":
+            return None
+        now = datetime.utcnow()
+        row.status = "running"
+        row.started_at = now
+        row.heartbeat_at = now
+        row.worker_id = worker_id
+        row.worker_hostname = worker_hostname
+        # pid is set by remote worker only if it wants to (we'll leave it None)
+        self.session.flush()
+        return _serialize_training_job(row)
+
+    def heartbeat_training_job(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+    ) -> TrainingJobSummary | None:
+        row = self.get_training_job_row(job_id)
+        if row is None:
+            return None
+        # Guard: only the claiming worker may heartbeat.
+        if row.worker_id and row.worker_id != worker_id:
+            return None
+        row.heartbeat_at = datetime.utcnow()
+        self.session.flush()
+        return _serialize_training_job(row)
+
+    def peek_next_queued_job(self, *, model_type: str | None = None) -> TrainingJobSummary | None:
+        """Return the oldest queued training job summary without claiming it.
+
+        Used by the lightweight GET /api/training/jobs/next-queued polling
+        endpoint so remote workers can poll cheaply before issuing a claim.
+        """
+        query = self.session.query(TrainingJob).filter(TrainingJob.status == "queued")
+        if model_type:
+            mt = str(model_type).strip().lower()
+            if mt not in {"ml", "dl"}:
+                return None
+            query = query.filter(TrainingJob.model_type == mt)
+        row = query.order_by(TrainingJob.requested_at.asc(), TrainingJob.id.asc()).first()
+        if row is None:
+            return None
+        return _serialize_training_job(row)
+
+    def claim_queued_job_by_id(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        worker_hostname: str | None,
+    ) -> tuple[TrainingJobSummary | None, str]:
+        """Atomically claim a specific queued job for a remote worker.
+
+        Returns ``(summary, reason)``. ``reason`` is one of:
+          * ``"claimed"``    — job was queued and is now running under worker_id.
+          * ``"not_found"``  — job_id does not exist.
+          * ``"not_queued"`` — job is in a non-queued status (running/failed/...).
+          * ``"race"``       — the job was picked up by another worker in this window.
+        """
+        dialect = self.session.bind.dialect.name if self.session.bind else ""
+        lock_sql = "SELECT id FROM training_jobs WHERE job_id = :jid"
+        if dialect == "postgresql":
+            lock_sql += " FOR UPDATE SKIP LOCKED"
+        result = self.session.execute(text(lock_sql), {"jid": job_id}).fetchone()
+        if result is None:
+            # Either truly missing, or locked by another worker (skip locked on pg).
+            plain = self.session.query(TrainingJob).filter(TrainingJob.job_id == job_id).first()
+            if plain is None:
+                return None, "not_found"
+            return None, "race"
+        row = self.session.query(TrainingJob).filter(TrainingJob.id == result[0]).first()
+        if row is None:
+            return None, "not_found"
+        if row.status != "queued":
+            return _serialize_training_job(row), "not_queued"
+        now = datetime.utcnow()
+        row.status = "running"
+        row.started_at = now
+        row.heartbeat_at = now
+        row.worker_id = worker_id
+        row.worker_hostname = worker_hostname
+        self.session.flush()
+        return _serialize_training_job(row), "claimed"
+
+    def release_stale_remote_jobs(self, *, stale_seconds: int = 300) -> int:
+        """Mark jobs failed if their worker hasn't sent a heartbeat in stale_seconds."""
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(seconds=max(int(stale_seconds), 60))
+        changed = 0
+        rows = (
+            self.session.query(TrainingJob)
+            .filter(TrainingJob.status == "running")
+            .filter(TrainingJob.worker_id.isnot(None))
+            .filter(TrainingJob.heartbeat_at.isnot(None))
+            .filter(TrainingJob.heartbeat_at <= cutoff)
+            .all()
+        )
+        for row in rows:
+            row.status = "failed"
+            row.completed_at = datetime.utcnow()
+            row.error_message = (
+                f"Remote worker {row.worker_id} stopped sending heartbeats "
+                f"(last at {row.heartbeat_at.isoformat() if row.heartbeat_at else 'unknown'})."
+            )
+            changed += 1
+        if changed:
+            self.session.flush()
+        return changed

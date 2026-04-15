@@ -29,7 +29,6 @@ export function AppDataProvider({ children }) {
     const today = new Date();
     const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
 
-    // Only use endpoints that are confirmed working (200 OK, fast response)
     const sections = [
       { key: "marketOverview",  url: "/api/market/overview",           interval: 60000  },
       { key: "newsFeed",        url: `/api/ai/news/feed?date=${dateStr}&limit=50`, interval: 60000 },
@@ -39,7 +38,12 @@ export function AppDataProvider({ children }) {
       { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000  },
       { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000 },
       { key: "brokerStatus",    url: "/api/broker/status",             interval: 60000  },
+      { key: "brokerSummary",   url: "/api/broker/summary",            interval: 30000  },
       { key: "macroCal",        url: "/api/macro/calendar",            interval: 3600000 },
+      // New sections for UI overhaul
+      { key: "autoTrading",     url: "/api/settings/runtime/auto-trading", interval: 30000 },
+      { key: "automationStatus",url: "/api/automation/status",         interval: 45000  },
+      { key: "telegramStatus",  url: "/api/notifications/telegram/status", interval: 120000 },
     ];
 
     const timers = [];
