@@ -94,7 +94,7 @@ def _coerce_analysis_payload(payload_json: dict | None) -> dict:
 
 
 def analyze_news(payload: AINewsAnalyzeRequest) -> dict:
-    """Analyze news using the configured LLM provider (Ollama or OpenAI)."""
+    """Analyze news using the configured local AI runtime."""
     user_prompt = _build_user_prompt(payload)
 
     # Add JSON schema instruction to user prompt for non-structured providers
@@ -149,5 +149,5 @@ Respond ONLY with valid JSON matching this exact schema (no extra fields):
         return {"success": False, "error": str(exc), "provider": "unknown"}
 
 
-# Backward compatibility alias
+# Backward compatibility alias for older imports.
 analyze_news_with_openai = analyze_news

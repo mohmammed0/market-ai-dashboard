@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Query
 
 from backend.app.api.error_handling import raise_for_error_payload
@@ -16,17 +18,28 @@ from backend.app.schemas.requests import (
     TrainDLRequest,
     TrainMLRequest,
 )
+from backend.app.schemas import SymbolSignalResponse
 from backend.app.services.background_jobs import JOB_TYPE_INFERENCE_BATCH, submit_background_job
 from backend.app.services.ai_overlay import get_overlay_status
 from backend.app.services.decision_support import build_decision_payload
 from backend.app.services.explainability import build_signal_explanation
 from backend.app.services.job_workflows import run_batch_inference_workflow
-from backend.app.services.signal_runtime import build_smart_analysis
+from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
 from backend.app.services.tool_gateway import get_tool_gateway
 from core.backtest_service import backtest_symbol_enhanced, run_vectorbt_backtest
 
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
+
+
+def _confidence_to_score(value: float | int | str | None) -> float:
+    try:
+        confidence = float(value or 0.0)
+    except Exception:
+        confidence = 0.0
+    if confidence <= 1.0:
+        confidence *= 100.0
+    return round(max(0.0, min(confidence, 100.0)), 2)
 
 
 @router.get("/status")
@@ -121,6 +134,37 @@ def decision_surface(payload: InferenceRequest):
         payload.end_date,
         include_dl=payload.include_dl,
         include_ensemble=payload.include_ensemble,
+    )
+
+
+@router.get("/signal/{symbol}", response_model=SymbolSignalResponse)
+def signal_surface(
+    symbol: str,
+    mode: str = Query(default="ensemble"),
+    start_date: str = Query(default="2024-01-01"),
+    end_date: str | None = Query(default=None),
+):
+    resolved_symbol = str(symbol or "").strip().upper()
+    resolved_end_date = end_date or datetime.now(timezone.utc).date().isoformat()
+    analysis = build_smart_analysis(
+        resolved_symbol,
+        start_date,
+        resolved_end_date,
+        include_dl=True,
+        include_ensemble=True,
+    )
+    analysis = raise_for_error_payload(analysis, default_status=503)
+    signal_view = extract_signal_view(analysis, mode=mode)
+    return SymbolSignalResponse(
+        symbol=resolved_symbol,
+        mode=str(signal_view.get("mode") or mode or "ensemble"),
+        signal=str(signal_view.get("signal") or "HOLD").upper(),
+        confidence=float(signal_view.get("confidence") or 0.0),
+        score=_confidence_to_score(signal_view.get("confidence")),
+        price=signal_view.get("price"),
+        reasoning=str(signal_view.get("reasoning") or "").strip() or None,
+        start_date=start_date,
+        end_date=resolved_end_date,
     )
 
 

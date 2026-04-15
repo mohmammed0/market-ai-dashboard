@@ -28,7 +28,7 @@ export async function checkAuthStatus() {
 export function logout() {
   localStorage.removeItem("market_ai_token");
   localStorage.removeItem("market_ai_user");
-  window.location.href = "/login";
+  window.location.href = "/";
 }
 
 export function getStoredUser() {

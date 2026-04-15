@@ -1,18 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import PageFrame from "../components/ui/PageFrame";
 import EmptyState from "../components/ui/EmptyState";
 import ErrorBanner from "../components/ui/ErrorBanner";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
-import SectionHeader from "../components/ui/SectionHeader";
+import MetricCard from "../components/ui/MetricCard";
+import PageFrame from "../components/ui/PageFrame";
+import SectionCard from "../components/ui/SectionCard";
 import StatusBadge from "../components/ui/StatusBadge";
-import { fetchAiStatus, getNewsFeed } from "../lib/api";
+import { fetchAiStatus, getNewsFeed } from "../api/ai";
 
-
-// ──────────────────────────────────────────────
-// Date helpers
-// ──────────────────────────────────────────────
 function toDateStr(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -27,6 +24,27 @@ function formatArabicDate(date) {
     month: "long",
     day: "numeric",
   });
+}
+
+function formatTime(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString("ar-SA", {
+      hour: "2-digit",
+      minute: "2-digit",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function sentimentTone(sentiment) {
+  const normalized = String(sentiment || "").toLowerCase();
+  if (normalized === "positive" || normalized === "bullish") return "positive";
+  if (normalized === "negative" || normalized === "bearish") return "negative";
+  return "neutral";
 }
 
 function prevDay(date) {
@@ -49,92 +67,49 @@ function isFuture(date) {
   return toDateStr(date) > toDateStr(new Date());
 }
 
-
-// ──────────────────────────────────────────────
-// Sentiment helpers
-// ──────────────────────────────────────────────
-function sentimentTone(sentiment) {
-  if (!sentiment) return "subtle";
-  const s = String(sentiment).toLowerCase();
-  if (s === "positive" || s === "bullish") return "accent";
-  if (s === "negative" || s === "bearish") return "warning";
-  return "subtle";
-}
-
-function sentimentLabel(sentiment) {
-  if (!sentiment) return null;
-  const s = String(sentiment).toLowerCase();
-  if (s === "positive" || s === "bullish") return "صاعد";
-  if (s === "negative" || s === "bearish") return "هابط";
-  return "محايد";
-}
-
-function formatTime(isoStr) {
-  if (!isoStr) return "";
-  try {
-    return new Date(isoStr).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}
-
-
-// ──────────────────────────────────────────────
-// NewsItem component
-// ──────────────────────────────────────────────
-function NewsItem({ item }) {
-  const tone = sentimentTone(item.sentiment);
-  const label = sentimentLabel(item.sentiment);
-  const timeStr = formatTime(item.captured_at);
-
+function NewsFeedCard({ item }) {
   return (
-    <div className="news-feed-item">
-      <div className="news-feed-item-header">
-        <span className="news-feed-instrument">{item.instrument}</span>
-        {label && <StatusBadge label={label} tone={tone} />}
+    <article className="news-card news-card--full">
+      <div className="news-card-header">
+        <div className="news-card-tags">
+          {item?.instrument ? <span className="news-card-symbol">{item.instrument}</span> : null}
+          {item?.sentiment ? <StatusBadge label={item.sentiment} tone={sentimentTone(item.sentiment)} /> : null}
+          {item?.score != null ? <span className="news-card-score">Impact {item.score}</span> : null}
+        </div>
+        {item?.source ? <span className="news-card-source">{item.source}</span> : null}
       </div>
-      <p className="news-feed-title">
-        {item.url ? (
-          <a href={item.url} target="_blank" rel="noopener noreferrer" className="news-feed-link">
-            {item.title || "(بدون عنوان)"}
+      <h3 className="news-card-title">
+        {item?.url ? (
+          <a href={item.url} target="_blank" rel="noreferrer">
+            {item.title || "بدون عنوان"}
           </a>
         ) : (
-          item.title || "(بدون عنوان)"
+          item?.title || "بدون عنوان"
         )}
-      </p>
-      <div className="news-feed-meta">
-        {item.source && <span className="news-feed-source">{item.source}</span>}
-        {timeStr && <span className="news-feed-time">{timeStr}</span>}
-        {item.score != null && (
-          <span className="news-feed-score">نقاط: {item.score}</span>
-        )}
+      </h3>
+      <div className="news-card-footer">
+        <span>{formatTime(item?.captured_at || item?.published)}</span>
+        <span>{item?.id ? `#${item.id}` : ""}</span>
       </div>
-    </div>
+    </article>
   );
 }
 
-
-// ──────────────────────────────────────────────
-// Main page
-// ──────────────────────────────────────────────
 export default function AINewsPage() {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [feedData, setFeedData] = useState(null);
   const [feedLoading, setFeedLoading] = useState(true);
   const [feedError, setFeedError] = useState("");
   const [aiStatus, setAiStatus] = useState(null);
-  const refreshTimerRef = useRef(null);
   const [searchParams] = useSearchParams();
+  const refreshTimerRef = useRef(null);
 
-  // Load AI status once
+  const symbolFilter = searchParams.get("symbol") || "";
+
   useEffect(() => {
     fetchAiStatus().then(setAiStatus).catch(() => {});
   }, []);
 
-  // Filter by symbol from URL param
-  const symbolFilter = searchParams.get("symbol") || "";
-
-  // Load feed whenever date changes
   useEffect(() => {
     let active = true;
 
@@ -142,116 +117,139 @@ export default function AINewsPage() {
       setFeedLoading(true);
       setFeedError("");
       try {
-        const data = await getNewsFeed(toDateStr(selectedDate), 50);
-        if (active) setFeedData(data);
-      } catch (e) {
-        if (active) setFeedError(e.message || "فشل تحميل الأخبار.");
+        const payload = await getNewsFeed(toDateStr(selectedDate), 50, 0, symbolFilter || null);
+        if (active) {
+          setFeedData(payload);
+        }
+      } catch (error) {
+        if (active) {
+          setFeedError(error.message || "فشل تحميل الأخبار.");
+        }
       } finally {
-        if (active) setFeedLoading(false);
+        if (active) {
+          setFeedLoading(false);
+        }
       }
     }
 
-    loadFeed();
-
-    // Auto-refresh every 60s when viewing today
-    if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+    loadFeed().catch(() => {});
+    if (refreshTimerRef.current) {
+      clearInterval(refreshTimerRef.current);
+    }
     if (isToday(selectedDate)) {
-      refreshTimerRef.current = setInterval(loadFeed, 60_000);
+      refreshTimerRef.current = setInterval(() => loadFeed().catch(() => {}), 60_000);
     }
 
     return () => {
       active = false;
-      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+      }
     };
-  }, [selectedDate]);
+  }, [selectedDate, symbolFilter]);
 
-  function goToPrevDay() { setSelectedDate((d) => prevDay(d)); }
-  function goToNextDay() { if (!isFuture(nextDay(selectedDate))) setSelectedDate((d) => nextDay(d)); }
-  function goToToday() { setSelectedDate(new Date()); }
+  const items = useMemo(() => Array.isArray(feedData?.items) ? feedData.items : [], [feedData]);
+  const positiveCount = items.filter((item) => sentimentTone(item.sentiment) === "positive").length;
+  const negativeCount = items.filter((item) => sentimentTone(item.sentiment) === "negative").length;
+  const neutralCount = items.filter((item) => sentimentTone(item.sentiment) === "neutral").length;
+  const topSources = useMemo(() => {
+    const counts = new Map();
+    items.forEach((item) => {
+      const key = item?.source || "Unknown";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [items]);
 
-  const isNextDisabled = isFuture(nextDay(selectedDate));
-
-  // Optional: filter items by symbol if URL param present
-  const items = feedData?.items
-    ? symbolFilter
-      ? feedData.items.filter((i) => i.instrument?.toUpperCase() === symbolFilter.toUpperCase())
-      : feedData.items
-    : [];
+  const nextDisabled = isFuture(nextDay(selectedDate));
 
   return (
     <PageFrame
-      title="تغذية أخبار السوق"
-      description="آخر الأخبار المُجمَّعة تلقائياً مع التحليل الآلي بالذكاء الاصطناعي المحلي."
+      title="الأخبار"
+      description="غرفة أخبار احترافية تعرض العنوان والمصدر والوقت والرمز المرتبط وحالة المعنويات عندما تتوفر."
       eyebrow="AI Research"
       headerActions={
-        <StatusBadge
-          label={aiStatus?.effective_status === "ready" ? "AI جاهز" : "AI غير متصل"}
-          tone={aiStatus?.effective_status === "ready" ? "accent" : "subtle"}
-        />
+        <>
+          {symbolFilter ? <StatusBadge label={`رمز: ${symbolFilter.toUpperCase()}`} tone="accent" /> : null}
+          <StatusBadge label={aiStatus?.effective_status === "ready" ? "AI جاهز" : "AI غير متصل"} tone={aiStatus?.effective_status === "ready" ? "positive" : "warning"} />
+        </>
       }
     >
-      {/* ── Date Navigation Bar ── */}
-      <div className="panel news-date-nav">
-        <button
-          className="icon-button news-nav-arrow"
-          onClick={goToPrevDay}
-          aria-label="اليوم السابق"
-          title="اليوم السابق"
-        >
-          &#8594;
-        </button>
+      <ErrorBanner message={feedError} />
 
-        <span className="news-date-label">{formatArabicDate(selectedDate)}</span>
-
-        <button
-          className="icon-button news-nav-arrow"
-          onClick={goToNextDay}
-          disabled={isNextDisabled}
-          aria-label="اليوم التالي"
-          title="اليوم التالي"
-          style={{ opacity: isNextDisabled ? 0.35 : 1 }}
-        >
-          &#8592;
-        </button>
-
-        {!isToday(selectedDate) && (
-          <button className="secondary-button news-today-btn" onClick={goToToday}>
+      <section className="news-toolbar-card">
+        <div className="news-toolbar-main">
+          <button className="icon-button news-nav-arrow" type="button" onClick={() => setSelectedDate((current) => prevDay(current))} aria-label="اليوم السابق">
+            &#8594;
+          </button>
+          <div className="news-toolbar-copy">
+            <strong>{formatArabicDate(selectedDate)}</strong>
+            <span>{isToday(selectedDate) ? "عرض اليوم الحالي مع تحديث تلقائي" : "عرض أرشيف يومي"}</span>
+          </div>
+          <button className="icon-button news-nav-arrow" type="button" onClick={() => setSelectedDate((current) => nextDay(current))} aria-label="اليوم التالي" disabled={nextDisabled} style={{ opacity: nextDisabled ? 0.35 : 1 }}>
+            &#8592;
+          </button>
+        </div>
+        {!isToday(selectedDate) ? (
+          <button className="secondary-button news-today-btn" type="button" onClick={() => setSelectedDate(new Date())}>
             اليوم
           </button>
-        )}
-      </div>
+        ) : null}
+      </section>
 
-      {/* ── News Feed ── */}
-      <div className="panel result-panel">
-        <SectionHeader
-          title="تغذية الأخبار"
-          description={
-            feedData
-              ? `${feedData.total} خبر بتاريخ ${feedData.date}`
-              : "آخر الأخبار المُجمَّعة تلقائياً"
-          }
-          badge={isToday(selectedDate) ? "مباشر" : null}
-        />
+      {feedLoading ? (
+        <LoadingSkeleton lines={8} />
+      ) : (
+        <div className="command-grid">
+          <SectionCard
+            className="col-span-8"
+            title="تغذية الأخبار"
+            description={symbolFilter ? `النتائج الحالية مفلترة على ${symbolFilter.toUpperCase()}.` : "آخر الأخبار المجمعة من المصدر الحالي في المشروع."}
+            action={<StatusBadge label={items.length ? `${items.length} خبر` : "لا توجد"} tone={items.length ? "accent" : "subtle"} dot={false} />}
+          >
+            {items.length ? (
+              <div className="news-card-grid news-card-grid--single">
+                {items.map((item) => <NewsFeedCard key={item.id} item={item} />)}
+              </div>
+            ) : (
+              <EmptyState title="لا توجد أخبار لهذا اليوم" description="المصدر الحالي لم يرجع عناصر لهذا التاريخ. جرّب يوماً آخر أو دع عملية الجمع تعمل لفترة أطول." />
+            )}
+          </SectionCard>
 
-        {feedLoading && <LoadingSkeleton lines={6} />}
+          <SectionCard className="col-span-4" title="ملخص سريع" description="تفكيك سريع للتغذية الحالية حسب المعنويات والمصادر.">
+            <div className="analysis-mini-grid">
+              <MetricCard label="الإجمالي" value={items.length} detail={feedData?.date || "—"} tone="accent" />
+              <MetricCard label="إيجابي" value={positiveCount} detail="Positive / Bullish" tone="positive" />
+              <MetricCard label="سلبي" value={negativeCount} detail="Negative / Bearish" tone="negative" />
+              <MetricCard label="محايد" value={neutralCount} detail="Neutral / Missing" tone="warning" />
+            </div>
 
-        {!feedLoading && feedError && <ErrorBanner message={feedError} />}
-
-        {!feedLoading && !feedError && items.length === 0 && (
-          <EmptyState
-            title="لا توجد أخبار لهذا اليوم"
-            description="سيتم جمع الأخبار تلقائياً. حاول التنقل إلى يوم آخر."
-          />
-        )}
-
-        {!feedLoading && !feedError && items.length > 0 && (
-          <div className="news-feed-list">
-            {items.map((item) => (
-              <NewsItem key={item.id} item={item} />
-            ))}
-          </div>
-        )}
-      </div>
+            <div className="dashboard-subsection">
+              <div className="dashboard-subsection-head">
+                <strong>أكثر المصادر حضورًا</strong>
+                <span>Top sources</span>
+              </div>
+              <div className="dashboard-list">
+                {topSources.length ? (
+                  topSources.map(([source, count]) => (
+                    <div key={source} className="dashboard-list-item">
+                      <div className="dashboard-list-copy">
+                        <strong>{source}</strong>
+                        <p>عدد العناصر في التاريخ الحالي</p>
+                      </div>
+                      <div className="dashboard-list-meta">
+                        <StatusBadge label={`${count} خبر`} tone="subtle" dot={false} />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <EmptyState title="لا توجد مصادر بعد" description="عندما تصل أخبار حقيقية ستظهر هنا قائمة المصادر الأكثر نشاطًا." />
+                )}
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      )}
     </PageFrame>
   );
 }

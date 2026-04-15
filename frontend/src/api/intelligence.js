@@ -60,18 +60,5 @@ export async function calculateAtrSize(accountEquity, atrValue, price, riskPct =
 }
 
 export async function fetchSymbolSignal(symbol) {
-  // Use quote snapshot to derive a simple signal from price change + momentum
-  const data = await getJson(`/api/market/symbol/${encodeURIComponent(symbol)}/snapshot`, { cacheTtlMs: 30_000 });
-  if (!data || data.detail) return null;
-  const quote = data.quote || {};
-  const changePct = quote.change_pct;
-  // Simple signal: based on % change today
-  let signal = "محايد", score = 50;
-  if (changePct != null) {
-    if (changePct >= 1.5) { signal = "شراء قوي"; score = 80; }
-    else if (changePct >= 0.3) { signal = "شراء"; score = 65; }
-    else if (changePct <= -1.5) { signal = "بيع قوي"; score = 20; }
-    else if (changePct <= -0.3) { signal = "بيع"; score = 35; }
-  }
-  return { symbol, signal, score, change_pct: changePct, price: quote.price };
+  return getJson(`/api/intelligence/signal/${encodeURIComponent(symbol)}`, { cacheTtlMs: 30_000 });
 }

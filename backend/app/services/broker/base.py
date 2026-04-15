@@ -60,6 +60,7 @@ class BrokerProvider:
 
     def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
                      time_in_force: str = "day", limit_price: float | None = None,
+                     estimated_price: float | None = None,
                      stop_price: float | None = None, take_profit_price: float | None = None,
                      stop_loss_price: float | None = None) -> dict:
         """Submit an order to the broker. Returns order details or error."""

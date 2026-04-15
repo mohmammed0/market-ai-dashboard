@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 from sqlalchemy import func, or_
 
-from backend.app.config import DEFAULT_INDEX_SYMBOLS, MARKET_UNIVERSE_TTL_HOURS, RUNTIME_CACHE_DIR
+from backend.app.config import DEFAULT_INDEX_SYMBOLS, DEFAULT_SAMPLE_SYMBOLS, MARKET_UNIVERSE_TTL_HOURS, RUNTIME_CACHE_DIR
 from backend.app.models import MarketUniverseSymbol
 from backend.app.services import get_cache
 from backend.app.services.market_data import fetch_quote_snapshots, load_history
@@ -42,6 +42,15 @@ OTHER_EXCHANGE_MAP = {
     "Z": "Cboe BZX",
     "V": "IEX",
 }
+
+TOP_PERFORMER_SYMBOLS = [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "TSLA",
+    "AMZN",
+    "GOOGL",
+]
 
 UNIVERSE_PRESET_LABELS = {
     "CUSTOM": "Custom Symbols",
@@ -584,6 +593,22 @@ def get_market_overview() -> dict:
     status = ensure_market_universe()
     index_items = fetch_quote_snapshots(DEFAULT_INDEX_SYMBOLS, include_profile=False)["items"]
     featured = fetch_quote_snapshots(["AAPL", "MSFT", "NVDA", "SPY", "QQQ", "DIA"], include_profile=False)["items"]
+    tracked_leaders = []
+    candidate_symbols = []
+    for symbol in [*DEFAULT_SAMPLE_SYMBOLS, *TOP_PERFORMER_SYMBOLS]:
+        normalized = _normalize_symbol(symbol)
+        if normalized and normalized not in candidate_symbols:
+            candidate_symbols.append(normalized)
+    if candidate_symbols:
+        tracked_leaders = fetch_quote_snapshots(candidate_symbols, include_profile=False)["items"]
+        tracked_leaders = sorted(
+            [item for item in tracked_leaders if item.get("price") is not None],
+            key=lambda item: float(item.get("change_pct") or 0.0),
+            reverse=True,
+        )[:5]
+        for index, item in enumerate(tracked_leaders, start=1):
+            item["rank"] = index
+            item["performance_scope"] = "tracked_leaders"
     for item in index_items:
         item["label"] = INDEX_LABELS.get(item["symbol"], item["symbol"])
         item["exchange"] = "INDEX"
@@ -593,6 +618,7 @@ def get_market_overview() -> dict:
         "universe_status": status,
         "indices": index_items,
         "featured": featured,
+        "top_performers": tracked_leaders,
     }
 
 

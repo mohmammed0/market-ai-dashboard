@@ -5,9 +5,10 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.app.schemas import AINewsAnalyzeRequest
+from backend.app.schemas import AINewsAnalyzeRequest, AIStatus
 from backend.app.services.ai_news_analyst import analyze_news
 from backend.app.services.llm_gateway import get_llm_status, LLMUnavailableError
+from backend.app.services.news_feed import refresh_news_feed
 from backend.app.models.market import NewsRecord
 from backend.app.db import get_db
 
@@ -15,7 +16,7 @@ from backend.app.db import get_db
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 
-@router.get("/status")
+@router.get("/status", response_model=AIStatus)
 def ai_status():
     return get_llm_status()
 
@@ -79,6 +80,15 @@ def get_news_feed(
         "limit": limit,
         "items": [record_to_dict(r) for r in records],
     }
+
+
+@router.post("/news/refresh")
+def refresh_news_feed_endpoint(
+    symbols: Optional[str] = Query(None, description="Comma-separated symbols; defaults to the sample market symbols."),
+    per_symbol_limit: int = Query(5, ge=1, le=10),
+):
+    normalized_symbols = [value.strip().upper() for value in str(symbols or "").split(",") if value.strip()]
+    return refresh_news_feed(normalized_symbols or None, per_symbol_limit=per_symbol_limit)
 
 
 @router.post("/news/analyze")

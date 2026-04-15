@@ -632,7 +632,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     except Exception:
         symbol_limit = 10
     symbol_limit = max(1, min(symbol_limit, 500))
-
+    full_portfolio_mode = str(os.environ.get("MARKET_AI_AUTO_TRADING_USE_FULL_PORTFOLIO", "0")).strip().lower() in {"1", "true", "yes", "on"}
     # Use the curated liquid-symbols list (MARKET_AI_SAMPLE_SYMBOLS in .env) — the
     # full ALL_US_EQUITIES preset pulls in thinly traded penny stocks with no
     # reliable Yahoo history, which just produces empty cycles.
@@ -645,12 +645,14 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     try:
         from backend.app.application.execution.service import get_internal_portfolio
         held_payload = get_internal_portfolio(limit=500) or {}
-        held = {
-            str(pos.get("symbol") or "").upper()
+        held_positions = {
+            str(pos.get("symbol") or "").upper(): str(pos.get("side") or "").upper()
             for pos in (held_payload.get("items") or [])
             if (pos.get("status") or "").upper() == "OPEN"
         }
+        held = set(held_positions.keys())
     except Exception:
+        held_positions = {}
         held = set()
 
     unheld = [s for s in symbols if s not in held]
@@ -662,6 +664,41 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     else:
         rotation = (unheld + held_pool)[:symbol_limit]
     symbols = rotation[:symbol_limit] or list(DEFAULT_SAMPLE_SYMBOLS)[:symbol_limit]
+    candidate_symbols = list(symbols)
+    if full_portfolio_mode:
+        mover_limit = max(symbol_limit * 4, 12)
+        try:
+            local_candidates = []
+            for candidate in _preferred_local_symbols(preset):
+                normalized = str(candidate or "").upper()
+                if not normalized.isalpha():
+                    continue
+                if len(normalized) > 5:
+                    continue
+                if normalized.endswith(("W", "U", "R")):
+                    continue
+                local_candidates.append(normalized)
+                if len(local_candidates) >= 80:
+                    break
+            snapshot_symbols = local_candidates or list(DEFAULT_SAMPLE_SYMBOLS)
+            mover_snapshots = fetch_quote_snapshots(snapshot_symbols, include_profile=False)
+            mover_items = [
+                item
+                for item in (mover_snapshots or {}).get("items", [])
+                if float(item.get("last_price") or item.get("price") or 0.0) >= 5.0
+            ]
+            mover_symbols = [
+                str(item.get("symbol") or "").upper()
+                for item in sorted(
+                    mover_items,
+                    key=lambda entry: abs(float(entry.get("change_pct") or 0.0)),
+                    reverse=True,
+                )
+                if str(item.get("symbol") or "").strip()
+            ][:mover_limit]
+            candidate_symbols = list(dict.fromkeys(held_pool + mover_symbols))
+        except Exception:
+            candidate_symbols = list(dict.fromkeys(held_pool + list(DEFAULT_SAMPLE_SYMBOLS)[:mover_limit]))
 
     # Run signal refresh with auto-execute.
     # Use a shorter analysis window for auto-trading so each symbol finishes fast
@@ -681,6 +718,8 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         start_date, end_date = _analysis_window()
 
     # --- dynamic position sizing: aim for NOTIONAL_PER_TRADE dollars per symbol.
+    # In full-portfolio mode we size from the internal paper wallet cash balance,
+    # which makes the next entry consume all currently available cash.
     # Fetch quotes up-front (cheap) to size each order in shares. Falls back to the
     # flat AUTO_TRADING_QUANTITY when a quote is unavailable.
     fallback_qty = max(AUTO_TRADING_QUANTITY, 1.0)
@@ -688,12 +727,32 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         notional_per_trade = float(os.environ.get("MARKET_AI_AUTO_TRADING_NOTIONAL_PER_TRADE", "0") or 0.0)
     except Exception:
         notional_per_trade = 0.0
+    portfolio_cash_balance = 0.0
+    portfolio_equity = 0.0
+    try:
+        from backend.app.application.execution.service import get_internal_portfolio
+
+        portfolio_payload = get_internal_portfolio(limit=500) or {}
+        portfolio_summary = portfolio_payload.get("summary") or {}
+        portfolio_cash_balance = float(portfolio_summary.get("cash_balance") or 0.0)
+        portfolio_equity = float(portfolio_summary.get("total_equity") or 0.0)
+    except Exception:
+        portfolio_payload = {}
+        portfolio_summary = {}
+
+    if full_portfolio_mode:
+        notional_per_trade = max(portfolio_cash_balance, 0.0)
+        if notional_per_trade <= 0:
+            notional_per_trade = max(portfolio_equity, 0.0)
 
     price_lookup: dict[str, float] = {}
-    if notional_per_trade > 0 and symbols:
+    quote_symbols = list(
+        dict.fromkeys(candidate_symbols if full_portfolio_mode and candidate_symbols else symbols)
+    )
+    if notional_per_trade > 0 and quote_symbols:
         try:
             from backend.app.services.market_data import fetch_quote_snapshots
-            snap = fetch_quote_snapshots(symbols, include_profile=False)
+            snap = fetch_quote_snapshots(quote_symbols, include_profile=False)
             for item in (snap or {}).get("items", []):
                 sym = str(item.get("symbol") or "").upper()
                 px = float(item.get("last_price") or item.get("price") or 0.0)
@@ -702,38 +761,184 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         except Exception:
             price_lookup = {}
 
-    def _compute_qty(symbol: str) -> float:
-        if notional_per_trade <= 0:
+    def _compute_qty(symbol: str, budget: float | None = None) -> float:
+        effective_budget = float(notional_per_trade if budget is None else budget or 0.0)
+        if effective_budget <= 0:
             return fallback_qty
         px = price_lookup.get(symbol.upper(), 0.0)
         if px <= 0:
             return fallback_qty
-        shares = max(int(notional_per_trade // px), 1)
+        shares = max(int(effective_budget // px), 1)
         return float(shares)
 
     # Loop per symbol when dynamic sizing is active so each order can carry its
     # own share count. Small N here (typically 2) keeps this practical.
     aggregate_items: list[dict] = []
     last_correlation: str | None = None
+    allocated_quantities: dict[str, float] = {}
+    selected_execution_candidates: list[dict] = []
     try:
         if notional_per_trade > 0:
-            for sym in symbols:
-                qty = _compute_qty(sym)
-                sub = refresh_signals(
-                    symbols=[sym],
-                    mode="classic",
-                    start_date=start_date,
-                    end_date=end_date,
-                    auto_execute=True,
-                    quantity=qty,
+            if full_portfolio_mode and candidate_symbols:
+                preview_candidates: list[dict] = []
+                actionable_candidates: list[dict] = []
+                for index, sym in enumerate(candidate_symbols):
+                    try:
+                        preview_result = build_smart_analysis(sym, start_date, end_date, include_dl=True, include_ensemble=True)
+                        if "error" in preview_result:
+                            preview_candidates.append({"symbol": sym, "error": preview_result.get("error")})
+                            continue
+                        signal_view = extract_signal_view(preview_result, mode="classic")
+                        signal_value = str(signal_view.get("signal") or "HOLD").upper()
+                        current_side = held_positions.get(sym.upper())
+                        desired_side = "LONG" if signal_value == "BUY" else "SHORT" if signal_value == "SELL" else None
+                        preview_entry = {
+                            "symbol": sym,
+                            "signal": signal_value,
+                            "confidence": float(signal_view.get("confidence") or 0.0),
+                            "price": float(signal_view.get("price") or price_lookup.get(sym.upper()) or 0.0),
+                            "current_side": current_side,
+                            "result": preview_result,
+                        }
+                        preview_candidates.append(preview_entry)
+                        if desired_side and current_side != desired_side and preview_entry["price"] >= 5.0:
+                            actionable_candidates.append(preview_entry)
+                    except Exception as exc:
+                        preview_candidates.append({"symbol": sym, "error": str(exc)})
+                actionable_candidates = [
+                    item for item in sorted(actionable_candidates, key=lambda entry: float(entry.get("confidence") or 0.0), reverse=True)
+                    if float(item.get("price") or price_lookup.get(item.get("symbol", "").upper()) or 0.0) > 0
+                ]
+                if actionable_candidates:
+                    selected_candidates = actionable_candidates[:symbol_limit]
+                    selected_execution_candidates = list(selected_candidates)
+                    symbols = [item["symbol"] for item in selected_candidates]
+                    budget_per_symbol = max(float(notional_per_trade) * 0.995 / len(selected_candidates), 0.0)
+                    for item in selected_candidates:
+                        qty = _compute_qty(item["symbol"], budget=budget_per_symbol)
+                        if qty > 0:
+                            allocated_quantities[item["symbol"].upper()] = qty
+            if full_portfolio_mode and symbols and not allocated_quantities:
+                new_entry_symbols = [sym for sym in symbols if sym.upper() not in held_positions] or list(symbols)
+                budget_per_symbol = max(float(notional_per_trade) * 0.995 / len(new_entry_symbols), 0.0)
+                for sym in new_entry_symbols:
+                    qty = _compute_qty(sym, budget=budget_per_symbol)
+                    if qty > 0:
+                        allocated_quantities[sym.upper()] = qty
+            if full_portfolio_mode and selected_execution_candidates:
+                from backend.app.application.execution.service import (
+                    _apply_trade_intent,
+                    _build_quote_lookup,
+                    _build_signal_snapshot,
+                    _build_trade_intents,
+                    _record_signal_alerts,
+                    get_alert_history,
+                    get_internal_portfolio,
+                    get_signal_history,
                 )
-                aggregate_items.extend(sub.get("items", []))
-                last_correlation = sub.get("correlation_id") or last_correlation
-            result = {
-                "items": aggregate_items,
-                "correlation_id": last_correlation,
-                "portfolio": (sub or {}).get("portfolio", {}) if symbols else {},
-            }
+                from backend.app.domain.execution.contracts import ExecutionEventRecord, PositionState, SignalRecord
+                from backend.app.repositories.execution import ExecutionRepository
+
+                last_correlation = f"paper-refresh-{uuid4().hex[:12]}"
+                quote_lookup = _build_quote_lookup(symbols)
+                with session_scope() as session:
+                    repo = ExecutionRepository(session)
+                    for item in selected_execution_candidates:
+                        sym = item["symbol"]
+                        signal_snapshot = _build_signal_snapshot(
+                            sym,
+                            "classic",
+                            item.get("result") or build_smart_analysis(sym, start_date, end_date, include_dl=True, include_ensemble=True),
+                            start_date,
+                            end_date,
+                            quote_lookup=quote_lookup,
+                        )
+                        previous_signal = repo.latest_signal(sym, "classic")
+                        repo.append_signal(
+                            SignalRecord(
+                                symbol=sym,
+                                strategy_mode="classic",
+                                signal=signal_snapshot.signal,
+                                confidence=signal_snapshot.confidence,
+                                price=signal_snapshot.price,
+                                reasoning=signal_snapshot.reasoning,
+                                payload=signal_snapshot.analysis_payload,
+                            )
+                        )
+                        _record_signal_alerts(repo, "classic", signal_snapshot, previous_signal)
+                        repo.append_audit_event(
+                            ExecutionEventRecord(
+                                event_type="signal_recorded",
+                                symbol=sym,
+                                strategy_mode="classic",
+                                correlation_id=last_correlation,
+                                payload=signal_snapshot.model_dump(),
+                            )
+                        )
+                        current_row = repo.get_open_position_row(sym, "classic")
+                        current_position = None if current_row is None else PositionState(
+                            id=current_row.id,
+                            symbol=current_row.symbol,
+                            strategy_mode=current_row.strategy_mode,
+                            side=current_row.side,
+                            quantity=current_row.quantity,
+                            avg_entry_price=current_row.avg_entry_price,
+                            current_price=current_row.current_price,
+                            market_value=current_row.market_value or 0.0,
+                            unrealized_pnl=current_row.unrealized_pnl or 0.0,
+                            realized_pnl=current_row.realized_pnl or 0.0,
+                            status=current_row.status,
+                            opened_at=current_row.opened_at,
+                            updated_at=current_row.updated_at,
+                        )
+                        qty = allocated_quantities.get(sym.upper(), fallback_qty)
+                        intents = _build_trade_intents(current_position, signal_snapshot, qty)
+                        for intent in intents:
+                            _apply_trade_intent(repo, current_row, intent, correlation_id=last_correlation)
+                            if intent.intent.startswith("CLOSE"):
+                                current_row = None
+                        aggregate_items.append(
+                            {
+                                "symbol": sym,
+                                "strategy_mode": "classic",
+                                "signal": signal_snapshot.signal,
+                                "confidence": signal_snapshot.confidence,
+                                "price": signal_snapshot.price,
+                                "reasoning": signal_snapshot.reasoning,
+                            }
+                        )
+                    repo.append_audit_event(
+                        ExecutionEventRecord(
+                            event_type="refresh_completed",
+                            correlation_id=last_correlation,
+                            payload={"symbols": symbols, "mode": "classic", "results": len(aggregate_items)},
+                        )
+                    )
+                result = {
+                    "items": aggregate_items,
+                    "correlation_id": last_correlation,
+                    "portfolio": get_internal_portfolio(limit=500),
+                    "alerts": get_alert_history(limit=20),
+                    "signals": get_signal_history(limit=20),
+                }
+            else:
+                for sym in symbols:
+                    qty = allocated_quantities.get(sym.upper(), fallback_qty)
+                    sub = refresh_signals(
+                        symbols=[sym],
+                        mode="classic",
+                        start_date=start_date,
+                        end_date=end_date,
+                        auto_execute=True,
+                        quantity=qty,
+                    )
+                    aggregate_items.extend(sub.get("items", []))
+                    last_correlation = sub.get("correlation_id") or last_correlation
+                result = {
+                    "items": aggregate_items,
+                    "correlation_id": last_correlation,
+                    "portfolio": (sub or {}).get("portfolio", {}) if symbols else {},
+                }
             quantity = fallback_qty  # reported default; per-symbol used above
         else:
             result = refresh_signals(
@@ -767,6 +972,10 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         "errors": len(errors),
         "auto_executed": True,
         "quantity_per_trade": quantity,
+        "full_portfolio_mode": full_portfolio_mode,
+        "notional_per_trade": round(float(notional_per_trade or 0.0), 4),
+        "portfolio_cash_balance": round(float(portfolio_cash_balance or 0.0), 4),
+        "allocated_quantities": allocated_quantities,
         "correlation_id": result.get("correlation_id"),
         "top_buys": [
             {"symbol": i["symbol"], "confidence": i.get("confidence", 0), "price": i.get("price", 0)}

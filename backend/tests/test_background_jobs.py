@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from sqlalchemy.orm import close_all_sessions
+
 
 _TMP_DIR = tempfile.TemporaryDirectory(prefix="market_ai_jobs_tests_")
 _DB_PATH = Path(_TMP_DIR.name) / "jobs_test.db"
@@ -31,13 +33,20 @@ from backend.app.services.background_jobs import (
 class BackgroundJobsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls.auth_enabled_patcher = patch("backend.app.main.AUTH_ENABLED", False)
+        cls.warmup_patcher = patch("backend.app.main._warm_runtime_caches", return_value=None)
+        cls.auth_enabled_patcher.start()
+        cls.warmup_patcher.start()
         cls.client_cm = TestClient(app)
         cls.client = cls.client_cm.__enter__()
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.client_cm.__exit__(None, None, None)
+        close_all_sessions()
         engine.dispose()
+        cls.warmup_patcher.stop()
+        cls.auth_enabled_patcher.stop()
         _TMP_DIR.cleanup()
 
     def test_backtest_endpoint_returns_job_id_and_status(self):

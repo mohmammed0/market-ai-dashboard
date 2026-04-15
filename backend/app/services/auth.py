@@ -1,19 +1,19 @@
 """Authentication service — JWT-based API authentication.
 
-Provides token creation, verification, and a FastAPI dependency for
-protecting routes. Uses HMAC-SHA256 for password hashing.
+Provides token creation, verification, and FastAPI dependencies for
+protecting routes.
 
 Security notes:
-- Change AUTH_SECRET_KEY in production (use: openssl rand -hex 32)
-- Set a strong AUTH_DEFAULT_PASSWORD via env var
-- Tokens expire after AUTH_ACCESS_TOKEN_EXPIRE_MINUTES (default 24h)
+- Production requires an explicit password and a non-default JWT secret.
+- Passwords are hashed with PBKDF2-HMAC-SHA256 and a per-user random salt.
+- Legacy HMAC-only hashes are still accepted for compatibility and upgraded
+  in-memory on successful authentication.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
-import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -22,12 +22,14 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.app.config import (
+    APP_ENV,
     AUTH_ACCESS_TOKEN_EXPIRE_MINUTES,
     AUTH_ALGORITHM,
     AUTH_DEFAULT_PASSWORD,
     AUTH_DEFAULT_USERNAME,
     AUTH_ENABLED,
     AUTH_SECRET_KEY,
+    AUTH_SECRET_KEY_IS_DEFAULT,
 )
 from backend.app.core.logging_utils import get_logger
 
@@ -40,16 +42,55 @@ except ImportError:
 
 security = HTTPBearer(auto_error=False)
 
+_PBKDF2_PREFIX = "pbkdf2_sha256"
+_PBKDF2_ITERATIONS = 390000
 
-def _hash_password(password: str) -> str:
-    """Simple HMAC-SHA256 hash (no external bcrypt dependency needed)."""
-    return hmac.new(
-        AUTH_SECRET_KEY.encode(), password.encode(), hashlib.sha256
-    ).hexdigest()
+
+def _legacy_hash_password(password: str) -> str:
+    return hmac.new(AUTH_SECRET_KEY.encode(), password.encode(), hashlib.sha256).hexdigest()
+
+
+def _hash_password(password: str, *, salt: str | None = None, iterations: int = _PBKDF2_ITERATIONS) -> str:
+    resolved_salt = salt or secrets.token_hex(16)
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        resolved_salt.encode("utf-8"),
+        int(iterations),
+    )
+    return f"{_PBKDF2_PREFIX}${int(iterations)}${resolved_salt}${derived.hex()}"
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
-    return hmac.compare_digest(_hash_password(plain), hashed)
+    if str(hashed or "").startswith(f"{_PBKDF2_PREFIX}$"):
+        try:
+            _, iterations, salt, digest = hashed.split("$", 3)
+            candidate = _hash_password(plain, salt=salt, iterations=int(iterations))
+            return hmac.compare_digest(candidate, hashed)
+        except Exception:
+            return False
+    return hmac.compare_digest(_legacy_hash_password(plain), hashed)
+
+
+def auth_configuration_warnings() -> list[str]:
+    warnings: list[str] = []
+    if not AUTH_ENABLED:
+        return warnings
+    if AUTH_SECRET_KEY_IS_DEFAULT:
+        warnings.append("JWT secret is still using the development default value.")
+    if not AUTH_DEFAULT_PASSWORD:
+        warnings.append("No persistent admin password is configured.")
+    return warnings
+
+
+def validate_auth_configuration() -> None:
+    warnings = auth_configuration_warnings()
+    if not warnings:
+        return
+    if APP_ENV != "development":
+        raise RuntimeError("Authentication is insecure outside development: " + " ".join(warnings))
+    for warning in warnings:
+        logger.warning("Auth configuration warning: %s", warning)
 
 
 # In-memory user store (single-user for now, extensible)
@@ -58,22 +99,28 @@ _users: dict[str, dict] = {}
 
 def _ensure_default_user() -> None:
     """Create default admin user if none exists."""
-    if AUTH_DEFAULT_USERNAME and AUTH_DEFAULT_USERNAME not in _users:
-        password = AUTH_DEFAULT_PASSWORD or secrets.token_urlsafe(16)
-        _users[AUTH_DEFAULT_USERNAME] = {
-            "username": AUTH_DEFAULT_USERNAME,
-            "password_hash": _hash_password(password),
-            "role": "admin",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if not AUTH_DEFAULT_PASSWORD:
-            logger.warning(
-                "No AUTH_DEFAULT_PASSWORD set. Generated temporary password: %s "
-                "— set MARKET_AI_AUTH_DEFAULT_PASSWORD env var for persistence.",
-                password,
-            )
-        else:
-            logger.info("Default auth user '%s' initialized.", AUTH_DEFAULT_USERNAME)
+    if not AUTH_DEFAULT_USERNAME or AUTH_DEFAULT_USERNAME in _users:
+        return
+
+    if APP_ENV == "production" and not AUTH_DEFAULT_PASSWORD:
+        raise RuntimeError(
+            "MARKET_AI_AUTH_DEFAULT_PASSWORD must be set when authentication is enabled in production."
+        )
+
+    password = AUTH_DEFAULT_PASSWORD or secrets.token_urlsafe(16)
+    _users[AUTH_DEFAULT_USERNAME] = {
+        "username": AUTH_DEFAULT_USERNAME,
+        "password_hash": _hash_password(password),
+        "role": "admin",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not AUTH_DEFAULT_PASSWORD:
+        logger.warning(
+            "No AUTH_DEFAULT_PASSWORD set. Generated a temporary in-memory password for the default user. "
+            "Set MARKET_AI_AUTH_DEFAULT_PASSWORD for a persistent login.",
+        )
+    else:
+        logger.info("Default auth user '%s' initialized.", AUTH_DEFAULT_USERNAME)
 
 
 def authenticate_user(username: str, password: str) -> Optional[dict]:
@@ -84,6 +131,8 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
         return None
     if not _verify_password(password, user["password_hash"]):
         return None
+    if not str(user["password_hash"]).startswith(f"{_PBKDF2_PREFIX}$"):
+        user["password_hash"] = _hash_password(password)
     return user
 
 

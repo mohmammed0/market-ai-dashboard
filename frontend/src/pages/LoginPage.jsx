@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { login } from "../api/auth";
+import { checkAuthStatus, login } from "../api/auth";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -8,6 +8,20 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let active = true;
+    checkAuthStatus()
+      .then((status) => {
+        if (active && status?.auth_enabled === false) {
+          navigate("/", { replace: true });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();

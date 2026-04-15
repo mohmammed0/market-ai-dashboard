@@ -20,7 +20,8 @@ function listOrFallback(items, fallback) {
 
 function AiOverlayBadge({ provenance }) {
   if (!provenance) return null;
-  const isAi = provenance.ai_overlay_applied || provenance.ai_source === "ollama" || provenance.ai_source === "openai";
+  const aiSource = String(provenance.ai_source || "").trim().toLowerCase();
+  const isAi = provenance.ai_overlay_applied || aiSource === "ollama" || aiSource === "openai";
   const source = provenance.ai_source || "deterministic";
   const model = provenance.ai_model;
 

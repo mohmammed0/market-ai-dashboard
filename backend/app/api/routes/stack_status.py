@@ -2,7 +2,7 @@
 
 GET /api/stack         — Full stack validation report
 GET /api/stack/summary — Compact one-line-per-subsystem summary
-GET /api/stack/llm     — LLM provider status (Ollama/OpenAI availability)
+GET /api/stack/llm     — Local LLM provider status
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def get_stack_summary():
 def get_llm_status_endpoint():
     """LLM provider availability status.
 
-    Returns configuration and runtime status of Ollama (local) and OpenAI (remote),
+    Returns configuration and runtime status of the local AI runtime,
     plus the active provider determined by AI_PROVIDER config.
     """
     return get_llm_status()

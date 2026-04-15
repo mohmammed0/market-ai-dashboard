@@ -10,6 +10,7 @@ from backend.app.services.broker import (
     get_broker_orders as _get_broker_orders,
     get_broker_positions as _get_broker_positions,
     get_broker_status as _get_broker_status,
+    get_broker_summary as _get_broker_summary,
 )
 from backend.app.services.storage import session_scope
 
@@ -48,20 +49,18 @@ def get_broker_status() -> dict:
 
 
 def get_broker_summary(refresh: bool = False) -> dict:
-    account_payload = _get_broker_account(refresh=refresh)
-    positions_payload = _get_broker_positions(refresh=refresh)
-    orders_payload = _get_broker_orders(refresh=refresh)
-    status = _to_status(account_payload)
+    payload = _get_broker_summary(refresh=refresh)
+    status = _to_status(payload)
     summary = BrokerSummary(
         status=status,
-        account=_to_account(account_payload.get("account")),
-        positions=_to_positions(positions_payload.get("items")),
-        orders=_to_orders(orders_payload.get("items")),
-        totals={
-            "positions": len(positions_payload.get("items", [])),
-            "open_orders": len(orders_payload.get("items", [])),
-            "market_value": sum(float(item.get("market_value") or 0.0) for item in positions_payload.get("items", [])),
-            "unrealized_pnl": sum(float(item.get("unrealized_pnl") or 0.0) for item in positions_payload.get("items", [])),
+        account=_to_account(payload.get("account")),
+        positions=_to_positions(payload.get("positions")),
+        orders=_to_orders(payload.get("orders")),
+        totals=payload.get("totals") or {
+            "positions": len(payload.get("positions", [])),
+            "open_orders": len(payload.get("orders", [])),
+            "market_value": sum(float(item.get("market_value") or 0.0) for item in payload.get("positions", [])),
+            "unrealized_pnl": sum(float(item.get("unrealized_pnl") or 0.0) for item in payload.get("positions", [])),
         },
     )
     if status.connected:

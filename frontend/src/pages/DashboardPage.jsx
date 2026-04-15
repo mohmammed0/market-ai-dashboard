@@ -1,504 +1,458 @@
-import { useAppData } from "../store/AppDataStore";
 import { useNavigate } from "react-router-dom";
-import { buildBrokerPortfolioSnapshot } from "../lib/brokerPortfolio";
 
-function pct(v) { const n = Number(v ?? 0); return (n >= 0 ? "+" : "") + n.toFixed(2) + "%"; }
-function money(v) { return Number(v ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+import EmptyState from "../components/ui/EmptyState";
+import ErrorBanner from "../components/ui/ErrorBanner";
+import LoadingSkeleton from "../components/ui/LoadingSkeleton";
+import MetricCard from "../components/ui/MetricCard";
+import PageFrame from "../components/ui/PageFrame";
+import SectionCard from "../components/ui/SectionCard";
+import StatusBadge from "../components/ui/StatusBadge";
+import SummaryStrip from "../components/ui/SummaryStrip";
+import { useAppData } from "../store/AppDataStore";
 
-/* ── Strategy recommendation based on portfolio value ── */
-function getStrategyRecommendation(portfolioValue) {
-  const v = Number(portfolioValue || 0);
-  if (v <= 0) return {
-    level: "inactive",
-    title: "لا يوجد رأس مال",
-    desc: "اضف مبلغ للمحفظة التجريبية لبدء التداول",
-    color: "#555a6b",
-    bg: "rgba(85,90,107,0.1)",
-    maxPositions: 0,
-    riskPerTrade: "0%",
-    strategy: "—",
-  };
-  if (v < 10000) return {
-    level: "conservative",
-    title: "استراتيجية محافظة",
-    desc: "مبلغ صغير — التركيز على الأسهم القيادية والصناديق (ETFs) فقط مع حد أقصى 5 مراكز",
-    color: "#2196F3",
-    bg: "rgba(33,150,243,0.1)",
-    maxPositions: 5,
-    riskPerTrade: "2%",
-    strategy: "Blue Chips + ETFs",
-  };
-  if (v < 50000) return {
-    level: "moderate",
-    title: "استراتيجية متوازنة",
-    desc: "تنويع معتدل — 10-15 مركز، مزيج من النمو والقيمة مع وقف خسارة 5%",
-    color: "#FF9800",
-    bg: "rgba(255,152,0,0.1)",
-    maxPositions: 15,
-    riskPerTrade: "3%",
-    strategy: "Growth + Value Mix",
-  };
-  if (v < 100000) return {
-    level: "growth",
-    title: "استراتيجية نمو",
-    desc: "محفظة كبيرة — 15-25 مركز، تداول عدواني مسموح مع تنويع قطاعي",
-    color: "#089981",
-    bg: "rgba(8,153,129,0.1)",
-    maxPositions: 25,
-    riskPerTrade: "5%",
-    strategy: "Aggressive Growth",
-  };
-  return {
-    level: "full",
-    title: "تنويع كامل",
-    desc: "محفظة مؤسسية — كل الاستراتيجيات مفعلة، 25+ مركز، تداول آلي كامل",
-    color: "#9C27B0",
-    bg: "rgba(156,39,176,0.1)",
-    maxPositions: 40,
-    riskPerTrade: "10%",
-    strategy: "Full Diversification",
-  };
+function money(value) {
+  const numeric = Number(value ?? 0);
+  return `$${numeric.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function StatCard({ label, value, sub, subTone, icon, accent }) {
-  const subColor = subTone === "pos" ? "var(--tv-positive)" : subTone === "neg" ? "var(--tv-negative)" : "var(--tv-text-muted)";
+function pct(value) {
+  const numeric = Number(value ?? 0);
+  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)}%`;
+}
+
+function compactDate(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString("ar-SA", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function signalTone(signal) {
+  const normalized = String(signal || "").trim().toUpperCase();
+  if (normalized === "BUY" || normalized === "BULLISH") return "positive";
+  if (normalized === "SELL" || normalized === "BEARISH") return "negative";
+  if (normalized === "HOLD" || normalized === "NEUTRAL") return "warning";
+  return "neutral";
+}
+
+function statusTone(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["ready", "ok", "running", "connected", "completed", "success"].includes(normalized)) return "positive";
+  if (["warning", "idle", "disabled", "pending", "queued"].includes(normalized)) return "warning";
+  if (["failed", "error", "unavailable", "blocked"].includes(normalized)) return "negative";
+  return "neutral";
+}
+
+function sourceTone(isBroker) {
+  return isBroker ? "info" : "warning";
+}
+
+function IndexCard({ item, onInspect }) {
+  const change = Number(item?.change_pct ?? 0);
   return (
-    <div className="tv-card" style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: accent ? `2px solid ${accent}` : undefined }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: "var(--tv-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
-        {icon && <span style={{ width: 18, height: 18, color: accent || "var(--tv-text-muted)" }}>{icon}</span>}
+    <button className="dashboard-market-card" type="button" onClick={() => onInspect(item?.symbol)}>
+      <div className="dashboard-market-card-top">
+        <div>
+          <strong>{item?.label || item?.symbol || "—"}</strong>
+          <span>{item?.symbol || "—"}</span>
+        </div>
+        <StatusBadge label={change >= 0 ? "صاعد" : "هابط"} tone={change >= 0 ? "positive" : "negative"} />
       </div>
-      <span style={{ fontSize: 22, fontWeight: 700, color: "var(--tv-text)", fontVariantNumeric: "tabular-nums" }}>{value}</span>
-      {sub && <span style={{ fontSize: 12, color: subColor }}>{sub}</span>}
-    </div>
+      <div className="dashboard-market-card-price">{Number(item?.price ?? 0).toFixed(2)}</div>
+      <div className={`dashboard-market-card-change ${change >= 0 ? "quote-positive" : "quote-negative"}`}>{pct(change)}</div>
+    </button>
   );
 }
 
-function StatusDot({ ok, label }) {
+function FeaturedTicker({ item, onNavigate }) {
+  const change = Number(item?.change_pct ?? 0);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: ok ? "#089981" : "#555a6b", flexShrink: 0 }} />
-      <span style={{ fontSize: 12, color: "var(--tv-text-muted)" }}>{label}</span>
-    </div>
+    <button className="dashboard-featured-row" type="button" onClick={() => onNavigate(`/ai-market?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+      <div className="dashboard-featured-copy">
+        <strong>{item?.symbol || "—"}</strong>
+        <span>{item?.security_name || item?.label || "رمز مميز"}</span>
+      </div>
+      <div className="dashboard-featured-metric">
+        <span>{Number(item?.price ?? 0).toFixed(2)}</span>
+        <small className={change >= 0 ? "quote-positive" : "quote-negative"}>{pct(change)}</small>
+      </div>
+    </button>
   );
 }
 
-function IndexRow({ item }) {
-  const chg = Number(item.change_pct ?? 0);
+function PerformerRow({ item, onNavigate }) {
+  const change = Number(item?.change_pct ?? 0);
   return (
-    <tr>
-      <td style={{ color: "var(--tv-text)", fontWeight: 600 }}>{item.symbol}</td>
-      <td style={{ color: "var(--tv-text)", fontVariantNumeric: "tabular-nums" }}>{Number(item.price ?? 0).toFixed(2)}</td>
-      <td style={{ color: chg >= 0 ? "var(--tv-positive)" : "var(--tv-negative)", fontVariantNumeric: "tabular-nums" }}>{pct(chg)}</td>
-    </tr>
+    <button className="dashboard-list-item dashboard-list-item--interactive dashboard-list-item--ranked" type="button" onClick={() => onNavigate(`/ai-market?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+      <div className="dashboard-rank-badge">{item?.rank || "—"}</div>
+      <div className="dashboard-list-copy">
+        <strong>{item?.symbol || "—"}</strong>
+        <p>{item?.security_name || item?.label || "سهم قيادي"}</p>
+      </div>
+      <div className="dashboard-list-meta">
+        <span>{Number(item?.price ?? 0).toFixed(2)}</span>
+        <small className={change >= 0 ? "quote-positive" : "quote-negative"}>{pct(change)}</small>
+      </div>
+    </button>
   );
 }
 
-function NewsRow({ item }) {
-  const s = String(item.sentiment || "").toLowerCase();
-  const dot = (s === "bullish" || s === "positive") ? "#089981" : (s === "bearish" || s === "negative") ? "#f23645" : "#555a6b";
+function NewsCard({ item, onNavigate }) {
+  const sentiment = String(item?.sentiment || "").toLowerCase();
+  const tone = sentiment === "positive" || sentiment === "bullish" ? "positive" : sentiment === "negative" || sentiment === "bearish" ? "negative" : "neutral";
   return (
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid var(--tv-border)" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0, marginTop: 5 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ margin: 0, fontSize: 13, color: "var(--tv-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "none" }}>{item.title}</a> : item.title}
-        </p>
-        <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--tv-text-muted)" }}>{item.instrument} · {item.source}</p>
+    <article className="news-card">
+      <div className="news-card-header">
+        <div className="news-card-tags">
+          {item?.instrument ? (
+            <button className="news-card-symbol" type="button" onClick={() => onNavigate(`/ai-market?symbol=${encodeURIComponent(item.instrument)}`)}>
+              {item.instrument}
+            </button>
+          ) : null}
+          {item?.sentiment ? <StatusBadge label={item.sentiment} tone={tone} /> : null}
+        </div>
+        {item?.source ? <span className="news-card-source">{item.source}</span> : null}
+      </div>
+      <h3 className="news-card-title">
+        {item?.url ? (
+          <a href={item.url} target="_blank" rel="noreferrer">
+            {item.title || "بدون عنوان"}
+          </a>
+        ) : (
+          item?.title || "بدون عنوان"
+        )}
+      </h3>
+      <div className="news-card-footer">
+        <span>{compactDate(item?.captured_at || item?.published)}</span>
+        {item?.score != null ? <span className="news-card-score">Score {item.score}</span> : null}
+      </div>
+    </article>
+  );
+}
+
+function SignalRow({ item, onNavigate }) {
+  const signal = item?.signal || item?.action || item?.stance || "HOLD";
+  return (
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+      <div className="dashboard-list-copy">
+        <strong>{item?.symbol || "—"}</strong>
+        <p>{item?.reason || item?.notes || item?.payload?.analysis?.close ? `Close ${item.payload.analysis.close}` : "إشارة محفوظة من محرك التنفيذ"}</p>
+      </div>
+      <div className="dashboard-list-meta">
+        <StatusBadge label={signal} tone={signalTone(signal)} dot={false} />
+        <span>{item?.confidence != null ? `${item.confidence}%` : compactDate(item?.created_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function JobRow({ item }) {
+  return (
+    <div className="dashboard-list-item">
+      <div className="dashboard-list-copy">
+        <strong>{item?.type || "تشغيل"}</strong>
+        <p>{compactDate(item?.created_at || item?.updated_at)}</p>
+      </div>
+      <div className="dashboard-list-meta">
+        <StatusBadge label={item?.status || "unknown"} tone={statusTone(item?.status)} dot={false} />
+        {item?.progress != null ? <span>{item.progress}%</span> : null}
       </div>
     </div>
+  );
+}
+
+function PositionRow({ item, onNavigate }) {
+  const pnl = Number(item?.unrealized_pnl ?? 0);
+  return (
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+      <div className="dashboard-list-copy">
+        <strong>{item?.symbol || "—"}</strong>
+        <p>{`${item?.side || "LONG"} · ${item?.quantity || 0} أسهم`}</p>
+      </div>
+      <div className="dashboard-list-meta">
+        <span>{money(item?.current_price || item?.avg_entry_price || 0)}</span>
+        <small className={pnl >= 0 ? "quote-positive" : "quote-negative"}>{money(pnl)}</small>
+      </div>
+    </button>
   );
 }
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { data: market, loading: mktLoading }    = useAppData("marketOverview");
-  const { data: portfolio }                      = useAppData("paperPortfolio");
-  const { data: broker }                         = useAppData("brokerStatus");
-  const { data: brokerSummary }                  = useAppData("brokerSummary");
-  const { data: ai }                             = useAppData("aiStatus");
-  const { data: news }                           = useAppData("newsFeed");
-  const { data: signals }                        = useAppData("paperSignals");
-  const { data: autoTrading }                    = useAppData("autoTrading");
-  const { data: automationStatus }               = useAppData("automationStatus");
-  const { data: telegramStatus }                 = useAppData("telegramStatus");
-  const { data: trades }                         = useAppData("paperTrades");
-  const brokerSnapshot = buildBrokerPortfolioSnapshot(brokerSummary);
-  const brokerDataConnected = Boolean(broker?.connected || brokerSummary?.connected);
-  const usingBrokerData = Boolean(brokerDataConnected && brokerSnapshot);
-  const portfolioSummary = usingBrokerData ? brokerSnapshot.summary : portfolio?.summary || {};
+  const { data: dashboardLite, loading, error } = useAppData("dashboardLite");
 
-  const indices    = market?.indices ?? [];
-  const newsItems  = (news?.items ?? []).slice(0, 8);
-  const pnl        = portfolioSummary?.total_unrealized_pnl ?? 0;
-  const mv         = portfolioSummary?.total_market_value   ?? 0;
-  const positions  = portfolioSummary?.open_positions       ?? 0;
-  const cashBalance = portfolioSummary?.cash_balance        ?? 0;
-  const invested   = portfolioSummary?.invested_cost        ?? 0;
-  const startingCash = portfolioSummary?.starting_cash      ?? 0;
-  // Total equity = cash + positions market value (this is the real "wallet balance")
-  const portfolioValue = portfolioSummary?.total_equity ?? portfolioSummary?.portfolio_value ?? (cashBalance + mv);
-  const realizedPnl = portfolioSummary?.total_realized_pnl  ?? 0;
-  const tradesList = usingBrokerData
-    ? brokerSnapshot?.trades || []
-    : trades?.trades ?? trades?.items ?? (Array.isArray(trades) ? trades : []);
-  const winRate = usingBrokerData ? null : portfolioSummary?.win_rate_pct ?? 0;
-  const totalTrades = usingBrokerData ? tradesList.length : portfolioSummary?.total_trades ?? 0;
-  const signalList = (signals?.items ?? signals ?? []).slice(0, 8);
+  const market = dashboardLite?.market_overview || {};
+  const portfolioSnapshot = dashboardLite?.portfolio_snapshot || {};
+  const ai = dashboardLite?.ai_status || {};
+  const news = dashboardLite?.news || {};
+  const signals = dashboardLite?.signals || {};
+  const autoTrading = dashboardLite?.auto_trading || {};
+  const automation = dashboardLite?.automation || {};
+  const telegram = dashboardLite?.telegram || {};
 
-  // Strategy recommendation
-  const strategy = getStrategyRecommendation(portfolioValue);
+  const summary = portfolioSnapshot?.summary || {};
+  const indices = Array.isArray(market?.indices) ? market.indices : [];
+  const featured = Array.isArray(market?.featured) ? market.featured : [];
+  const topPerformers = Array.isArray(market?.top_performers) && market.top_performers.length
+    ? market.top_performers
+    : featured
+        .filter((item) => !["SPY", "QQQ", "DIA"].includes(String(item?.symbol || "").toUpperCase()))
+        .sort((left, right) => Number(right?.change_pct ?? 0) - Number(left?.change_pct ?? 0))
+        .slice(0, 5)
+        .map((item, index) => ({ ...item, rank: item?.rank || index + 1 }));
+  const positions = Array.isArray(portfolioSnapshot?.positions) ? portfolioSnapshot.positions : [];
+  const trades = Array.isArray(portfolioSnapshot?.trades) ? portfolioSnapshot.trades : [];
+  const signalItems = Array.isArray(signals?.items) ? signals.items : [];
+  const newsItems = Array.isArray(news?.items) ? news.items : [];
+  const recentJobs = Array.isArray(automation?.recent_jobs) ? automation.recent_jobs : Array.isArray(automation?.jobs) ? automation.jobs : [];
 
-  // Auto-trading info
-  const atEnabled = autoTrading?.auto_trading_enabled;
-  const atReady   = autoTrading?.ready;
-  const brokerConnected = brokerDataConnected || autoTrading?.alpaca_configured;
+  const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
+  const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
+  const sourceDescription = usingBrokerData
+    ? "يتم الآن عرض الرصيد والمراكز من حساب الوسيط الورقي المتصل مع بقاء الإشارات صادرة من محرك التحليل الداخلي."
+    : "اللوحة الحالية تعتمد على المحاكاة الداخلية بالكامل، من دون مزجها بحساب وسيط خارجي.";
 
-  // Positions with trailing stops
-  const positionsList = usingBrokerData ? brokerSnapshot?.positions || [] : portfolio?.items ?? portfolio?.positions ?? [];
-  const trailingStopCount = positionsList.filter(p => p.trailing_stop_price || p.trailing_stop_pct).length;
-
-  // Automation recent jobs
-  const recentJobs = automationStatus?.recent_jobs ?? automationStatus?.jobs ?? [];
-  const lastAutoRun = recentJobs.find(j => j.type === "auto_trading_cycle" || j.type === "market_analysis");
-
-  // Trades
-  const recentTrades = tradesList.slice(0, 6);
+  const totalEquity = summary?.total_equity ?? summary?.portfolio_value ?? Number(summary?.cash_balance ?? 0) + Number(summary?.total_market_value ?? 0);
+  const aiReady = ai?.effective_status || ai?.status || "checking";
+  const aiProvider = ai?.effective_provider || ai?.active_provider || "unavailable";
+  const autoTradingLabel = autoTrading?.auto_trading_enabled ? (autoTrading?.ready ? "نشط وجاهز" : "مفعل") : "معطل";
+  const openPositions = Number(summary?.open_positions ?? positions.length ?? 0);
+  const totalTrades = Number(summary?.total_trades ?? trades.length ?? 0);
 
   return (
-    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 20 }}>
+    <PageFrame
+      title="لوحة القيادة"
+      description="لوحة تشغيل موحدة تُبرز السوق، المحفظة، الإشارات، والأتمتة في مساحة واحدة سهلة القراءة."
+      eyebrow="Live Summary"
+      headerActions={
+        <>
+          <StatusBadge label={sourceLabel} tone={sourceTone(usingBrokerData)} />
+          <StatusBadge label={aiReady} tone={statusTone(aiReady)} />
+        </>
+      }
+    >
+      <ErrorBanner message={error} />
 
-      {/* ── Row 1: Key Stats ── */}
-      <div className="tv-card-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-        <StatCard
-          label="إجمالي رصيد المحفظة"
-          value={"$" + money(portfolioValue)}
-          sub={`نقد + استثمارات (بداية: $${money(startingCash)})`}
-          subTone="pos"
-          accent={strategy.color}
-        />
-        <StatCard
-          label="الرصيد النقدي"
-          value={"$" + money(cashBalance)}
-          sub={cashBalance > 0 ? "متاح للتداول" : "كل النقد مستثمر"}
-          subTone={cashBalance > 0 ? "pos" : "neutral"}
-          accent="#2196F3"
-        />
-        <StatCard
-          label="القيمة السوقية للمراكز"
-          value={"$" + money(mv)}
-          sub={positions === 0 ? "لا مراكز نشطة" : `${positions} مركز · تكلفة $${money(invested)}`}
-          subTone="neutral"
-          accent="#FF9800"
-        />
-        <StatCard
-          label="P&L غير محققة"
-          value={"$" + money(pnl)}
-          subTone={pnl >= 0 ? "pos" : "neg"}
-          sub={pnl >= 0 ? "ربح" : "خسارة"}
-          accent={pnl >= 0 ? "#089981" : "#f23645"}
-        />
-        <StatCard
-          label="P&L محققة"
-          value={"$" + money(realizedPnl)}
-          subTone={realizedPnl >= 0 ? "pos" : "neg"}
-          sub={totalTrades > 0 ? `${totalTrades} صفقة` : "—"}
-          accent={realizedPnl >= 0 ? "#089981" : "#f23645"}
-        />
-        <StatCard
-          label="نسبة النجاح"
-          value={winRate > 0 ? Number(winRate).toFixed(1) + "%" : "—"}
-          sub={totalTrades > 0 ? `من ${totalTrades} صفقة` : "لا صفقات بعد"}
-          subTone="neutral"
-        />
-      </div>
-
-      {/* ── Row 2: Strategy + System Status ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
-
-        {/* Strategy Recommendation */}
-        <div className="tv-card" style={{ borderRight: `3px solid ${strategy.color}` }}>
-          <p className="tv-section-title" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={strategy.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-            الاستراتيجية المقترحة
+      <section className="dashboard-hero">
+        <div className="dashboard-hero-copy">
+          <span className="dashboard-hero-kicker">Research And Trading Workspace</span>
+          <h2>واجهة تشغيل احترافية تضع أهم ما يهمك في أول الشاشة</h2>
+          <p>
+            السوق، المحفظة، الذكاء، والأتمتة ضمن تسلسل بصري واحد. البيانات نفسها محفوظة، لكن العرض الآن أوضح وأكثر
+            قابلية لاتخاذ القرار.
           </p>
-          <div style={{ background: strategy.bg, borderRadius: 8, padding: 16, marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 18, fontWeight: 700, color: strategy.color }}>{strategy.title}</span>
-              <span style={{ fontSize: 12, background: strategy.color, color: "#fff", padding: "2px 10px", borderRadius: 12, fontWeight: 600 }}>
-                ${money(portfolioValue)}
-              </span>
-            </div>
-            <p style={{ margin: 0, fontSize: 13, color: "var(--tv-text)", lineHeight: 1.6 }}>{strategy.desc}</p>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <div style={{ textAlign: "center", padding: 10, background: "var(--tv-bg-secondary, rgba(255,255,255,0.03))", borderRadius: 8 }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color: strategy.color }}>{strategy.maxPositions}</div>
-              <div style={{ fontSize: 11, color: "var(--tv-text-muted)" }}>اقصى مراكز</div>
-            </div>
-            <div style={{ textAlign: "center", padding: 10, background: "var(--tv-bg-secondary, rgba(255,255,255,0.03))", borderRadius: 8 }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color: strategy.color }}>{strategy.riskPerTrade}</div>
-              <div style={{ fontSize: 11, color: "var(--tv-text-muted)" }}>مخاطرة/صفقة</div>
-            </div>
-            <div style={{ textAlign: "center", padding: 10, background: "var(--tv-bg-secondary, rgba(255,255,255,0.03))", borderRadius: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: strategy.color }}>{strategy.strategy}</div>
-              <div style={{ fontSize: 11, color: "var(--tv-text-muted)" }}>نوع الاستراتيجية</div>
-            </div>
-          </div>
-        </div>
-
-        {/* System Status Panel */}
-        <div className="tv-card">
-          <p className="tv-section-title" style={{ marginBottom: 12 }}>حالة النظام</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <StatusDot ok={ai?.effective_status === "ready" || ai?.status === "running"} label={`الذكاء الاصطناعي — ${ai?.ollama?.model || ai?.effective_status || "..."}`} />
-            <StatusDot ok={brokerConnected} label={`الوسيط — ${broker?.provider || "غير متصل"} ${broker?.mode === "paper" ? "(ورقي)" : ""}`} />
-            <StatusDot ok={atEnabled && atReady} label={`التداول التلقائي — ${atEnabled ? (atReady ? "جاهز" : "غير مكتمل") : "معطل"}`} />
-            <StatusDot ok={telegramStatus?.configured} label={`تيليجرام — ${telegramStatus?.configured ? "متصل" : "غير مفعل"}`} />
-            <StatusDot ok={trailingStopCount > 0} label={`وقف الخسارة المتحرك — ${trailingStopCount > 0 ? `${trailingStopCount} مركز محمي` : "لا مراكز"}`} />
-
-            <div style={{ borderTop: "1px solid var(--tv-border)", paddingTop: 8, marginTop: 4 }}>
-              <div style={{ fontSize: 11, color: "var(--tv-text-muted)", marginBottom: 4 }}>اخر دورة تحليل</div>
-              <div style={{ fontSize: 13, color: "var(--tv-text)" }}>
-                {lastAutoRun?.created_at
-                  ? new Date(lastAutoRun.created_at).toLocaleString("ar-SA", { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" })
-                  : "لم تبدأ بعد"
-                }
-              </div>
-            </div>
-
-            <button
-              className="tv-btn-link"
-              style={{ fontSize: 12, color: "var(--tv-accent)", cursor: "pointer", background: "none", border: "none", textAlign: "start", padding: 0, marginTop: 4 }}
-              onClick={() => navigate("/settings")}
-            >
-              اعدادات النظام &larr;
+          <div className="dashboard-action-strip">
+            <button className="btn btn-primary" type="button" onClick={() => navigate("/ai-market")}>
+              افتح محطة التحليل
+            </button>
+            <button className="btn btn-secondary" type="button" onClick={() => navigate("/live-market")}>
+              راقب السوق المباشر
+            </button>
+            <button className="btn btn-ghost" type="button" onClick={() => navigate("/ai-news")}>
+              افتح غرفة الأخبار
             </button>
           </div>
         </div>
-      </div>
 
-      {/* ── Row 3: Auto-Trading Banner (if active) ── */}
-      {atEnabled && (
-        <div className="tv-card" style={{ background: atReady ? "rgba(8,153,129,0.08)" : "rgba(255,152,0,0.08)", borderRight: `3px solid ${atReady ? "#089981" : "#FF9800"}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ width: 10, height: 10, borderRadius: "50%", background: atReady ? "#089981" : "#FF9800", animation: atReady ? "pulse 2s infinite" : "none" }} />
-              <div>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--tv-text)" }}>
-                  التداول التلقائي {atReady ? "نشط" : "مفعل (غير مكتمل)"}
-                </span>
-                <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--tv-text-muted)" }}>
-                  {atReady
-                    ? "النظام يحلل السوق كل 30 دقيقة وينفذ اوامر تلقائيا"
-                    : "اضف مفاتيح Alpaca في الاعدادات لتفعيل التنفيذ التلقائي"
+        <div className="dashboard-hero-status">
+          <div className="dashboard-hero-pulse">
+            <div className="dashboard-hero-pulse-top">
+              <span>حالة النظام</span>
+              <StatusBadge label={aiProvider} tone={statusTone(aiReady)} dot={false} />
+            </div>
+            <div className="dashboard-hero-pulse-value">{aiReady === "ready" ? "Operational" : "Monitoring"}</div>
+            <p>المزود الحالي: {aiProvider}</p>
+          </div>
+          <div className="dashboard-hero-pulse">
+            <div className="dashboard-hero-pulse-top">
+              <span>التداول التلقائي</span>
+              <StatusBadge label={autoTradingLabel} tone={statusTone(autoTrading?.ready ? "ready" : autoTrading?.auto_trading_enabled ? "warning" : "disabled")} dot={false} />
+            </div>
+            <div className="dashboard-hero-pulse-value">{autoTrading?.ready ? "Ready" : "Standby"}</div>
+            <p>{telegram?.configured ? "Telegram configured" : "Telegram not configured"}</p>
+          </div>
+        </div>
+      </section>
+
+      {loading ? (
+        <LoadingSkeleton lines={6} />
+      ) : (
+        <>
+          <SummaryStrip
+            items={[
+              { label: "إجمالي رصيد المحفظة", value: money(totalEquity), detail: "القيمة الكلية الحالية", tone: "accent" },
+              { label: "الرصيد النقدي", value: money(summary?.cash_balance ?? 0), detail: "سيولة متاحة", tone: "info" },
+              { label: "القيمة السوقية", value: money(summary?.total_market_value ?? 0), detail: `${openPositions} مركز مفتوح`, tone: "warning" },
+              {
+                label: "P&L غير محققة",
+                value: money(summary?.total_unrealized_pnl ?? 0),
+                detail: "المكاسب/الخسائر الحالية",
+                tone: Number(summary?.total_unrealized_pnl ?? 0) >= 0 ? "positive" : "negative",
+              },
+              {
+                label: "P&L محققة",
+                value: money(summary?.total_realized_pnl ?? 0),
+                detail: `${totalTrades} صفقة`,
+                tone: Number(summary?.total_realized_pnl ?? 0) >= 0 ? "positive" : "negative",
+              },
+              { label: "الإشارات النشطة", value: signalItems.length, detail: "آخر 8 إشارات", tone: "accent" },
+            ]}
+          />
+
+          <div className="command-grid dashboard-grid">
+            <SectionCard
+              className="col-span-7"
+              title="لوحة السوق"
+              description="المؤشرات الرئيسية والرموز المميزة الحالية للوصول السريع إلى أكثر ما يتحرك الآن."
+              action={<StatusBadge label={`${indices.length} مؤشرات`} tone="subtle" dot={false} />}
+            >
+              <div className="dashboard-market-grid">
+                {indices.length ? (
+                  indices.map((item) => <IndexCard key={item.symbol} item={item} onInspect={(symbol) => navigate(`/live-market?symbol=${encodeURIComponent(symbol || "")}`)} />)
+                ) : (
+                  <EmptyState title="لا توجد بيانات مؤشرات" description="سيتحدث هذا القسم تلقائيًا عند توفر لقطات السوق." />
+                )}
+              </div>
+              <div className="dashboard-subsection">
+                <div className="dashboard-subsection-head">
+                  <strong>الرموز المميزة</strong>
+                  <span>انتقال سريع إلى التحليل</span>
+                </div>
+                <div className="dashboard-list">
+                  {featured.length ? (
+                    featured.slice(0, 6).map((item) => <FeaturedTicker key={item.symbol} item={item} onNavigate={navigate} />)
+                  ) : (
+                    <EmptyState title="لا توجد رموز مميزة" description="سيظهر هذا القسم عند توفر السوق المميز من الباك إند." />
+                  )}
+                </div>
+              </div>
+
+              <div className="dashboard-subsection">
+                <div className="dashboard-subsection-head">
+                  <strong>أفضل الأسهم صعودًا %</strong>
+                  <span>بحسب التغير اليومي بالنسبة المئوية داخل القائمة المتابعة</span>
+                </div>
+                <div className="dashboard-list">
+                  {topPerformers.length ? (
+                    topPerformers.map((item) => <PerformerRow key={`performer-${item.symbol}`} item={item} onNavigate={navigate} />)
+                  ) : (
+                    <EmptyState title="لا توجد أسهم متصدرة الآن" description="سيظهر هنا أفضل أداء من الأسهم القيادية عند توفر لقطات السوق الحالية." />
+                  )}
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              className="col-span-5"
+              title="مصدر بيانات التنفيذ"
+              description="اللقطة التشغيلية الحالية للمحفظة والطبقة التي تعتمد عليها الواجهة."
+              action={<StatusBadge label={sourceLabel} tone={sourceTone(usingBrokerData)} dot={false} />}
+            >
+              <div className="dashboard-source-card" data-testid="dashboard-source-badge">
+                <strong>مصدر بيانات التنفيذ</strong>
+                <p>{sourceDescription}</p>
+              </div>
+
+              <div className="dashboard-mini-metrics">
+                <MetricCard label="المراكز المفتوحة" value={openPositions} detail="نشطة الآن" />
+                <MetricCard label="الصفقات" value={totalTrades} detail="سجل التنفيذ" />
+                <MetricCard label="الفوز %" value={summary?.win_rate_pct != null ? `${Number(summary.win_rate_pct).toFixed(1)}%` : "—"} detail="منفصل عن الإشارة" />
+                <MetricCard label="المصدر" value={usingBrokerData ? "Broker Paper" : "Internal Simulated"} detail="Canonical snapshot" />
+              </div>
+
+              <div className="dashboard-subsection">
+                <div className="dashboard-subsection-head">
+                  <strong>المراكز الحالية</strong>
+                  <button className="secondary-button" type="button" onClick={() => navigate("/paper-trading")}>
+                    افتح التداول الورقي
+                  </button>
+                </div>
+                <div className="dashboard-list">
+                  {positions.length ? (
+                    positions.slice(0, 4).map((item, index) => <PositionRow key={`${item.symbol || "position"}-${index}`} item={item} onNavigate={navigate} />)
+                  ) : (
+                    <EmptyState title="لا توجد مراكز مفتوحة" description="سيتحدث هذا القسم تلقائيًا عند وجود مراكز أو ربط حساب ورقي." />
+                  )}
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              className="col-span-6"
+              title="غرفة الأخبار"
+              description="آخر الأخبار المجمعة من المصدر الحالي مع إظهار الرمز المرتبط والمشاعر إن توفرت."
+              action={<StatusBadge label={newsItems.length ? `${newsItems.length} خبر` : "فارغة"} tone={newsItems.length ? "accent" : "subtle"} dot={false} />}
+            >
+              {newsItems.length ? (
+                <div className="news-card-grid">
+                  {newsItems.map((item) => <NewsCard key={item.id} item={item} onNavigate={navigate} />)}
+                </div>
+              ) : (
+                <EmptyState
+                  title="لا توجد أخبار محفوظة اليوم"
+                  description="الواجهة جاهزة، لكن المصدر الحالي لم يسجّل أخبارًا حتى الآن. عند امتلاء feed ستظهر هنا مباشرة."
+                  action={
+                    <button className="btn btn-secondary btn-sm" type="button" onClick={() => navigate("/ai-news")}>
+                      افتح صفحة الأخبار
+                    </button>
                   }
-                </p>
+                />
+              )}
+            </SectionCard>
+
+            <SectionCard
+              className="col-span-6"
+              title="رادار الإشارات"
+              description="آخر الإشارات المحفوظة في النظام مع انتقال مباشر إلى شاشة التنفيذ."
+              action={<StatusBadge label={signalItems.length ? `${signalItems.length} إشارة` : "بدون"} tone={signalItems.length ? "positive" : "subtle"} dot={false} />}
+            >
+              <div className="dashboard-list">
+                {signalItems.length ? (
+                  signalItems.slice(0, 8).map((item, index) => <SignalRow key={`${item.symbol || "signal"}-${index}`} item={item} onNavigate={navigate} />)
+                ) : (
+                  <EmptyState title="لا توجد إشارات حديثة" description="حدّث الإشارات من صفحة التداول الورقي أو افتح محطة التحليل لإنتاج إشارة جديدة." />
+                )}
               </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              {autoTrading?.order_submission_enabled && (
-                <span style={{ fontSize: 11, background: "rgba(8,153,129,0.2)", color: "#089981", padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>
-                  ارسال الاوامر مفعل
-                </span>
-              )}
-              {autoTrading?.alpaca_paper && (
-                <span style={{ fontSize: 11, background: "rgba(33,150,243,0.2)", color: "#2196F3", padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>
-                  ورقي
-                </span>
-              )}
-              <button
-                style={{ fontSize: 12, color: "var(--tv-accent)", background: "none", border: "1px solid var(--tv-border)", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}
-                onClick={() => navigate("/paper-trading")}
-              >
-                فتح التداول
-              </button>
-            </div>
+            </SectionCard>
+
+            <SectionCard
+              className="col-span-6"
+              title="حالة النظام"
+              description="مراقبة الذكاء، الأتمتة، والإشعارات في سطح واحد سريع القراءة."
+              action={<StatusBadge label={aiReady} tone={statusTone(aiReady)} dot={false} />}
+            >
+              <div className="dashboard-system-grid">
+                <MetricCard label="AI" value={aiReady} detail={aiProvider} tone={statusTone(aiReady)} />
+                <MetricCard label="Automation" value={autoTradingLabel} detail={autoTrading?.ready ? "جاهز للتنفيذ" : "تحت المراقبة"} tone={statusTone(autoTrading?.ready ? "ready" : autoTrading?.auto_trading_enabled ? "warning" : "disabled")} />
+                <MetricCard label="Telegram" value={telegram?.configured ? "Configured" : "Not configured"} detail={telegram?.chat_id_set ? "Chat ID available" : "Missing chat id"} tone={telegram?.configured ? "info" : "warning"} />
+                <MetricCard label="Jobs" value={recentJobs.length} detail="آخر المهام" tone="accent" />
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              className="col-span-6"
+              title="التشغيلات الأخيرة"
+              description="آخر المهام الخلفية القادمة من طبقة الأتمتة والعمليات."
+              action={<StatusBadge label={recentJobs.length ? `${recentJobs.length} تشغيلات` : "لا توجد"} tone={recentJobs.length ? "accent" : "subtle"} dot={false} />}
+            >
+              <div className="dashboard-list">
+                {recentJobs.length ? (
+                  recentJobs.slice(0, 6).map((item, index) => <JobRow key={`${item.job_id || item.type || "job"}-${index}`} item={item} />)
+                ) : (
+                  <EmptyState title="لا توجد تشغيلات حديثة" description="سيتحدث هذا القسم تلقائيًا عند عمل scheduler أو تشغيل Job يدوي." />
+                )}
+              </div>
+            </SectionCard>
           </div>
-        </div>
+        </>
       )}
-
-      {/* ── Row 4: Positions with Trailing Stops (if any) ── */}
-      {positionsList.length > 0 && (
-        <div className="tv-card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <p className="tv-section-title" style={{ margin: 0 }}>المراكز المفتوحة</p>
-            <button
-              style={{ fontSize: 12, color: "var(--tv-accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-              onClick={() => navigate("/paper-trading")}
-            >
-              عرض الكل &larr;
-            </button>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table className="tv-table" style={{ width: "100%" }}>
-              <thead>
-                <tr>
-                  <th>الرمز</th>
-                  <th>الجانب</th>
-                  <th>الكمية</th>
-                  <th>الدخول</th>
-                  <th>الحالي</th>
-                  <th>P&L</th>
-                  <th>وقف الخسارة</th>
-                  <th>الوقف المتحرك</th>
-                </tr>
-              </thead>
-              <tbody>
-                {positionsList.slice(0, 10).map((p, i) => {
-                  const positionPnl = Number(p.unrealized_pnl || 0);
-                  const side = String(p.side || "").toUpperCase();
-                  const isLong = side === "LONG" || side === "BUY";
-                  return (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600, color: "var(--tv-text)" }}>{p.symbol}</td>
-                      <td>
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                          background: isLong ? "rgba(8,153,129,0.15)" : "rgba(242,54,69,0.15)",
-                          color: isLong ? "var(--tv-positive)" : "var(--tv-negative)"
-                        }}>{side}</span>
-                      </td>
-                      <td style={{ fontVariantNumeric: "tabular-nums" }}>{p.quantity}</td>
-                      <td style={{ fontVariantNumeric: "tabular-nums" }}>${Number(p.avg_entry_price || 0).toFixed(2)}</td>
-                      <td style={{ fontVariantNumeric: "tabular-nums" }}>${Number(p.current_price || 0).toFixed(2)}</td>
-                      <td style={{ fontVariantNumeric: "tabular-nums", color: positionPnl >= 0 ? "var(--tv-positive)" : "var(--tv-negative)", fontWeight: 600 }}>
-                        ${money(positionPnl)}
-                      </td>
-                      <td style={{ fontVariantNumeric: "tabular-nums", color: p.stop_loss_price ? "#FF9800" : "var(--tv-text-muted)", fontSize: 12 }}>
-                        {p.stop_loss_price ? `$${Number(p.stop_loss_price).toFixed(2)}` : "—"}
-                      </td>
-                      <td style={{ fontVariantNumeric: "tabular-nums", fontSize: 12 }}>
-                        {p.trailing_stop_pct ? (
-                          <span style={{ color: "#2196F3" }}>
-                            {Number(p.trailing_stop_pct).toFixed(1)}%
-                            {p.trailing_stop_price ? ` ($${Number(p.trailing_stop_price).toFixed(2)})` : ""}
-                          </span>
-                        ) : (
-                          <span style={{ color: "var(--tv-text-muted)" }}>—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {positionsList.length > 10 && (
-            <div style={{ textAlign: "center", padding: "8px 0", fontSize: 12, color: "var(--tv-text-muted)" }}>
-              +{positionsList.length - 10} مراكز اخرى
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Row 5: Market + News ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div className="tv-card">
-          <p className="tv-section-title">المؤشرات الرئيسية</p>
-          {mktLoading
-            ? <div className="tv-skeleton" style={{ height: 120 }} />
-            : indices.length === 0
-            ? <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا بيانات</p>
-            : <table className="tv-table" style={{ width: "100%" }}>
-                <thead><tr><th>المؤشر</th><th>السعر</th><th>التغيير</th></tr></thead>
-                <tbody>{indices.map((idx, i) => <IndexRow key={i} item={idx} />)}</tbody>
-              </table>
-          }
-        </div>
-        <div className="tv-card">
-          <p className="tv-section-title">اخر الاخبار</p>
-          {newsItems.length === 0
-            ? <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا اخبار اليوم</p>
-            : <div>{newsItems.map((n, i) => <NewsRow key={i} item={n} />)}</div>
-          }
-        </div>
-      </div>
-
-      {/* ── Row 6: Recent Signals + Recent Trades ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {/* Signals */}
-        <div className="tv-card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <p className="tv-section-title" style={{ margin: 0 }}>اخر الاشارات</p>
-            <button
-              style={{ fontSize: 12, color: "var(--tv-accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-              onClick={() => navigate("/paper-trading")}
-            >
-              عرض الكل &larr;
-            </button>
-          </div>
-          {signalList.length === 0 ? (
-            <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا اشارات حديثة</p>
-          ) : (
-            <table className="tv-table" style={{ width: "100%" }}>
-              <thead><tr><th>الرمز</th><th>الاشارة</th><th>الثقة</th><th>الوقت</th></tr></thead>
-              <tbody>
-                {signalList.map((s, i) => {
-                  const dir = String(s.signal || s.direction || s.action || "").toUpperCase();
-                  const up = dir === "BUY" || dir === "BULLISH" || dir === "LONG" || dir === "OPEN_LONG";
-                  const pill = { display:"inline-flex",alignItems:"center",padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:600,
-                    background: up ? "rgba(8,153,129,0.15)" : "rgba(242,54,69,0.15)",
-                    color: up ? "var(--tv-positive)" : "var(--tv-negative)" };
-                  return (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{s.symbol || s.instrument}</td>
-                      <td><span style={pill}>{dir || "—"}</span></td>
-                      <td style={{ color: "var(--tv-text-muted)" }}>{s.confidence ? Number(s.confidence).toFixed(0) + "%" : "—"}</td>
-                      <td style={{ color: "var(--tv-text-muted)", fontSize: 11 }}>{s.created_at ? new Date(s.created_at).toLocaleTimeString("ar-SA",{hour:"2-digit",minute:"2-digit"}) : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Recent Trades */}
-        <div className="tv-card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <p className="tv-section-title" style={{ margin: 0 }}>اخر الصفقات</p>
-            <button
-              style={{ fontSize: 12, color: "var(--tv-accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-              onClick={() => navigate("/trade-journal")}
-            >
-              سجل الصفقات &larr;
-            </button>
-          </div>
-          {recentTrades.length === 0 ? (
-            <p style={{ color: "var(--tv-text-muted)", fontSize: 13 }}>لا صفقات حديثة</p>
-          ) : (
-            <table className="tv-table" style={{ width: "100%" }}>
-              <thead><tr><th>الرمز</th><th>الجانب</th><th>الكمية</th><th>السعر</th><th>P&L</th></tr></thead>
-              <tbody>
-                {recentTrades.map((t, i) => {
-                  const tPnl = Number(t.realized_pnl || 0);
-                  const tSide = String(t.side || "").toUpperCase();
-                  const isBuy = tSide === "BUY";
-                  return (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{t.symbol}</td>
-                      <td>
-                        <span style={{
-                          display: "inline-flex", padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                          background: isBuy ? "rgba(8,153,129,0.15)" : "rgba(242,54,69,0.15)",
-                          color: isBuy ? "var(--tv-positive)" : "var(--tv-negative)"
-                        }}>{tSide || "—"}</span>
-                      </td>
-                      <td style={{ fontVariantNumeric: "tabular-nums" }}>{t.quantity}</td>
-                      <td style={{ fontVariantNumeric: "tabular-nums" }}>${Number(t.price || 0).toFixed(2)}</td>
-                      <td style={{ fontVariantNumeric: "tabular-nums", color: tPnl >= 0 ? "var(--tv-positive)" : "var(--tv-negative)", fontWeight: 600 }}>
-                        ${money(tPnl)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-
-    </div>
+    </PageFrame>
   );
 }

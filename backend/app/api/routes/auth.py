@@ -4,7 +4,12 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from backend.app.config import AUTH_ENABLED
-from backend.app.services.auth import authenticate_user, create_access_token, get_current_user
+from backend.app.schemas import AuthStatus
+from backend.app.services.auth import (
+    auth_configuration_warnings,
+    authenticate_user,
+    create_access_token,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -19,11 +24,6 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     role: str
-
-
-class AuthStatusResponse(BaseModel):
-    auth_enabled: bool
-    detail: str
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -43,15 +43,18 @@ async def login(request: LoginRequest):
     )
 
 
-@router.get("/status", response_model=AuthStatusResponse)
+@router.get("/status", response_model=AuthStatus)
 async def auth_status():
     """Check if authentication is enabled."""
+    warnings = auth_configuration_warnings()
     if AUTH_ENABLED:
-        return AuthStatusResponse(
+        return AuthStatus(
             auth_enabled=True,
             detail="Authentication is enabled. POST /auth/login to get a token.",
+            warnings=warnings,
         )
-    return AuthStatusResponse(
+    return AuthStatus(
         auth_enabled=False,
         detail="Authentication is disabled. All endpoints are open.",
+        warnings=warnings,
     )

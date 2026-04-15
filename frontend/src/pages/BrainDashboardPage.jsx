@@ -13,6 +13,43 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
+function normalizeHealthState(value) {
+  if (value == null) return "unknown";
+  if (typeof value === "string") return value.trim().toLowerCase();
+  if (typeof value === "object") {
+    const candidate = value.status || value.state || value.mode || value.detail || value.label;
+    return String(candidate || "unknown").trim().toLowerCase();
+  }
+  return String(value).trim().toLowerCase();
+}
+
+function healthStateLabel(value) {
+  const normalized = normalizeHealthState(value);
+  const labels = {
+    ok: "متصل",
+    connected: "متصل",
+    active: "نشط",
+    running: "يعمل",
+    ready: "جاهز",
+    paused: "موقوف",
+    disabled: "معطل",
+    idle: "خامل",
+    unavailable: "غير متاح",
+    misconfigured: "غير مهيأ",
+    error: "خطأ",
+    failed: "فشل",
+    unknown: "غير معروف",
+  };
+  return labels[normalized] || String(value || "غير معروف");
+}
+
+function healthStateTone(value) {
+  const normalized = normalizeHealthState(value);
+  if (["ok", "connected", "active", "running", "ready", "paused"].includes(normalized)) return "positive";
+  if (["disabled", "idle", "misconfigured"].includes(normalized)) return "warning";
+  return "negative";
+}
+
 function formatDuration(startedAt, completedAt) {
   if (!startedAt) return "-";
   const start = new Date(startedAt);
@@ -191,7 +228,8 @@ function SchedulerRow({ job, index }) {
 
 // ── Health Chip ───────────────────────────────────────────────────────────────
 function HealthChip({ label, value, ok }) {
-  const color = ok ? "#22c55e" : "#ef4444";
+  const tone = ok ? "positive" : healthStateTone(value);
+  const color = tone === "positive" ? "#22c55e" : tone === "warning" ? "#f59e0b" : "#ef4444";
   return (
     <div style={{
       display: "inline-flex", alignItems: "center", gap: 6,
@@ -200,7 +238,7 @@ function HealthChip({ label, value, ok }) {
     }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block" }} />
       <span style={{ fontSize: 12, color: "#94a3b8" }}>{label}</span>
-      <span style={{ fontSize: 12, color }}>{value || (ok ? "متصل" : "منقطع")}</span>
+      <span style={{ fontSize: 12, color }}>{healthStateLabel(value || (ok ? "connected" : "unknown"))}</span>
     </div>
   );
 }
@@ -216,14 +254,21 @@ export default function BrainDashboardPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [cl, h] = await Promise.all([
+      const [clResult, healthResult] = await Promise.allSettled([
         apiFetch("/api/continuous-learning/status"),
-        apiFetch("/api/health"),
+        apiFetch("/health"),
       ]);
-      setClStatus(cl);
-      setHealth(h);
+      if (clResult.status === "fulfilled") {
+        setClStatus(clResult.value);
+      }
+      if (healthResult.status === "fulfilled") {
+        setHealth(healthResult.value);
+      }
       setLastUpdate(new Date());
-      setError(null);
+      const errors = [clResult, healthResult]
+        .filter((result) => result.status === "rejected")
+        .map((result) => result.reason?.message || "خطأ غير معروف");
+      setError(errors.length ? errors.join(" • ") : null);
     } catch (e) {
       setError(e.message);
     } finally {

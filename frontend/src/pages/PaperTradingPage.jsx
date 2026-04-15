@@ -9,12 +9,12 @@ import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import MetricCard from "../components/ui/MetricCard";
 import SectionCard from "../components/ui/SectionCard";
 import SignalBadge from "../components/ui/SignalBadge";
+import SymbolPicker from "../components/ui/SymbolPicker";
 import TradingChart from "../components/ui/TradingChart";
 import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import useJobRunner from "../hooks/useJobRunner";
-import { buildBrokerPortfolioSnapshot } from "../lib/brokerPortfolio";
 import { cancelPaperOrder, refreshPaperSignals } from "../lib/api";
 import { useAppData, useAppStore } from "../store/AppDataStore";
 import { useWorkspace } from "../lib/useWorkspace";
@@ -22,28 +22,23 @@ import { useWorkspace } from "../lib/useWorkspace";
 
 export default function PaperTradingPage() {
   const todayIso = new Date().toISOString().slice(0, 10);
-  const { workspace, activeWatchlist } = useWorkspace();
-  const [searchParams] = useSearchParams();
+  const { workspace, activeWatchlist, favoriteSymbols } = useWorkspace();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [operatorSymbol, setOperatorSymbol] = useState("AAPL");
   const [activeTab, setActiveTab] = useState("positions");
   const [pageError, setPageError] = useState("");
 
   // Use pre-fetched data from global store
-  const { data: portfolio, loading: portfolioLoading } = useAppData("paperPortfolio");
-  const { data: orders, loading: ordersLoading } = useAppData("paperOrders");
-  const { data: trades, loading: tradesLoading } = useAppData("paperTrades");
+  const { data: portfolioSnapshot, loading: portfolioSnapshotLoading } = useAppData("portfolioSnapshot");
   const { data: signals, loading: signalsLoading } = useAppData("paperSignals");
-  const { data: brokerStatus } = useAppData("brokerStatus");
-  const { data: brokerSummary, loading: brokerSummaryLoading } = useAppData("brokerSummary");
   const { fetchSection } = useAppStore() || {};
-  const brokerPortfolio = useMemo(() => buildBrokerPortfolioSnapshot(brokerSummary), [brokerSummary]);
-  const brokerDataConnected = Boolean(brokerStatus?.connected || brokerSummary?.connected);
-  const usingBrokerData = Boolean(brokerDataConnected && brokerPortfolio);
-  const positionsSectionLoading = usingBrokerData ? brokerSummaryLoading : portfolioLoading;
-  const ordersSectionLoading = usingBrokerData ? brokerSummaryLoading : ordersLoading;
-  const tradesSectionLoading = usingBrokerData ? brokerSummaryLoading : tradesLoading;
+  const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
+  const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
+  const positionsSectionLoading = portfolioSnapshotLoading;
+  const ordersSectionLoading = portfolioSnapshotLoading;
+  const tradesSectionLoading = portfolioSnapshotLoading;
 
-  const loading = brokerDataConnected ? brokerSummaryLoading : portfolioLoading && ordersLoading;
+  const loading = portfolioSnapshotLoading;
 
   const refreshJob = useJobRunner("paper_signal_refresh", { recentLimit: 6 });
 
@@ -66,12 +61,8 @@ export default function PaperTradingPage() {
   useEffect(() => {
     if (refreshJob.currentJob?.status === "completed") {
       if (fetchSection) {
-        fetchSection("paperPortfolio", "/api/paper/portfolio");
-        fetchSection("paperOrders", "/api/paper/orders");
-        fetchSection("paperTrades", "/api/paper/trades");
-        fetchSection("paperSignals", "/api/paper/signals");
-        fetchSection("brokerStatus", "/api/broker/status");
-        fetchSection("brokerSummary", "/api/broker/summary");
+        fetchSection("portfolioSnapshot", "/api/portfolio/snapshot", { forceFresh: true });
+        fetchSection("paperSignals", "/api/paper/signals", { forceFresh: true });
       }
       refreshDecision({ symbol: operatorSymbol }).catch(() => {});
     }
@@ -90,35 +81,20 @@ export default function PaperTradingPage() {
   async function handleCancel(orderId) {
     try {
       await cancelPaperOrder(orderId);
-      if (fetchSection) fetchSection("paperOrders", "/api/paper/orders");
+      if (fetchSection) fetchSection("portfolioSnapshot", "/api/portfolio/snapshot", { forceFresh: true });
     } catch (e) {
       setPageError(e.message);
     }
   }
 
-  // Portfolio positions — API returns `items`, older shapes used `positions`
-  const positions = useMemo(
-    () => usingBrokerData ? brokerPortfolio?.items || [] : portfolio?.items || portfolio?.positions || [],
-    [brokerPortfolio, portfolio, usingBrokerData]
-  );
-  const summary = usingBrokerData ? brokerPortfolio?.summary || {} : portfolio?.summary || {};
+  const positions = useMemo(() => portfolioSnapshot?.positions || [], [portfolioSnapshot]);
+  const summary = portfolioSnapshot?.summary || {};
 
   // Orders list
-  const openOrders = useMemo(() => {
-    if (usingBrokerData) {
-      return brokerPortfolio?.open_orders || [];
-    }
-    const rawOrders = orders?.orders || orders?.items || (Array.isArray(orders) ? orders : []);
-    return rawOrders.filter(o => o.status === "OPEN" || o.status === "open");
-  }, [brokerPortfolio, orders, usingBrokerData]);
+  const openOrders = useMemo(() => portfolioSnapshot?.open_orders || [], [portfolioSnapshot]);
 
   // Trades list
-  const tradesList = useMemo(() => {
-    if (usingBrokerData) {
-      return brokerPortfolio?.trades || [];
-    }
-    return trades?.trades || trades?.items || (Array.isArray(trades) ? trades : []);
-  }, [brokerPortfolio, trades, usingBrokerData]);
+  const tradesList = useMemo(() => portfolioSnapshot?.trades || [], [portfolioSnapshot]);
 
   // Signals list
   const signalsList = useMemo(() => {
@@ -188,6 +164,27 @@ export default function PaperTradingPage() {
     { accessorKey: "reason", header: "السبب", cell: ({ row }) => <span>{row.original.reason || row.original.reasons || "-"}</span> },
   ], []);
 
+  const quickSymbols = useMemo(() => {
+    const seen = new Set();
+    return [operatorSymbol, ...(favoriteSymbols || []), ...((activeWatchlist?.symbols || []).slice(0, 6))]
+      .filter((item) => {
+        const normalized = String(item || "").trim().toUpperCase();
+        if (!normalized || seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+      })
+      .slice(0, 8);
+  }, [operatorSymbol, favoriteSymbols, activeWatchlist?.symbols]);
+
+  function handleOperatorSelect(item) {
+    const normalized = String(item?.symbol || item || "").trim().toUpperCase();
+    if (!normalized) return;
+    setOperatorSymbol(normalized);
+    const params = new URLSearchParams(searchParams);
+    params.set("symbol", normalized);
+    setSearchParams(params);
+  }
+
   return (
     <PageFrame
       title="التداول الورقي"
@@ -207,9 +204,46 @@ export default function PaperTradingPage() {
       <ErrorBanner message={pageError} />
       {usingBrokerData && (
         <div className="info-banner">
-          يتم عرض الرصيد والمراكز والأوامر والصفقات من حساب Alpaca المتصل. تبويب الإشارات ما زال يعتمد على محرك التحليل الداخلي.
+          المصدر الحالي: {sourceLabel}. يتم عرض الرصيد والمراكز والأوامر والصفقات من حساب Alpaca المتصل، بينما تبويب الإشارات ما زال يعتمد على محرك التحليل الداخلي.
         </div>
       )}
+
+      <SectionCard
+        title="سياق التنفيذ"
+        description="اختر الرمز التشغيلي من نفس القائمة canonical المستخدمة في السوق المباشر ومحطة التحليل."
+        action={<StatusBadge label={sourceLabel} tone={usingBrokerData ? "info" : "warning"} dot={false} />}
+      >
+        <div className="paper-operator-shell">
+          <div className="paper-operator-main">
+            <SymbolPicker
+              label="الرمز النشط"
+              value={operatorSymbol}
+              onChange={setOperatorSymbol}
+              onSelect={handleOperatorSelect}
+              placeholder="ابحث عن رمز للتنفيذ أو المراجعة"
+              helperText="اختيار الرمز هنا يحدّث مساحة القرار مباشرة مع إبقاء بيانات المحفظة كما هي."
+            />
+            <div className="workspace-symbol-actions">
+              {quickSymbols.map((item) => (
+                <button
+                  key={item}
+                  className={`workspace-symbol-chip${item === operatorSymbol ? " active" : ""}`}
+                  type="button"
+                  onClick={() => handleOperatorSelect(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="paper-operator-stats">
+            <MetricCard label="المصدر" value={sourceLabel} detail={usingBrokerData ? "Broker-connected snapshot" : "Internal simulated snapshot"} />
+            <MetricCard label="المراكز" value={summary.open_positions ?? positions.length ?? 0} detail="Open positions" />
+            <MetricCard label="الأوامر المفتوحة" value={openOrders.length} detail="Open orders" />
+            <MetricCard label="الصفقات" value={tradesList.length} detail="Trade history" />
+          </div>
+        </div>
+      </SectionCard>
 
       {/* Portfolio Summary */}
       {loading ? <LoadingSkeleton lines={2} /> : (

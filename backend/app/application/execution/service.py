@@ -28,7 +28,7 @@ from backend.app.services.signal_runtime import build_smart_analysis, extract_si
 from backend.app.services.storage import session_scope
 
 # Broker integration for live order submission
-def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market") -> dict | None:
+def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market", estimated_price: float | None = None) -> dict | None:
     """Submit order to broker (Alpaca) if configured and enabled."""
     try:
         from backend.app.services.runtime_settings import get_auto_trading_config
@@ -38,7 +38,13 @@ def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "mar
 
         from backend.app.services.broker.registry import get_broker_provider
         broker = get_broker_provider()
-        result = broker.submit_order(symbol=symbol, qty=qty, side=side, order_type=order_type)
+        result = broker.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            order_type=order_type,
+            estimated_price=estimated_price,
+        )
 
         if result.get("ok"):
             # Send Telegram notification
@@ -154,11 +160,55 @@ def _build_trade_intents(current_position: PositionState | None, signal_snapshot
     elif signal == "SELL":
         if current_position and current_position.side == "LONG":
             intents.append(TradeIntent(intent="CLOSE_LONG", symbol=symbol, strategy_mode=strategy_mode, side="LONG", quantity=current_position.quantity, execution_price=price, reason="Signal SELL closed long"))
-        if not current_position or current_position.side != "SHORT":
-            intents.append(TradeIntent(intent="OPEN_SHORT", symbol=symbol, strategy_mode=strategy_mode, side="SHORT", quantity=quantity, execution_price=price, reason="Signal SELL opened short"))
+        else:
+            intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal SELL ignored because no long position is open"))
     else:
         intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal HOLD generated no execution intent"))
     return intents
+
+
+def _get_internal_cash_balance() -> float:
+    portfolio = get_internal_portfolio(limit=500)
+    summary = portfolio.get("summary", {}) if isinstance(portfolio, dict) else {}
+    return max(_safe_float(summary.get("cash_balance"), 0.0), 0.0)
+
+
+def _validate_cash_only_order(
+    *,
+    side: str,
+    symbol: str,
+    quantity: float,
+    estimated_price: float,
+    fee_amount: float = 0.0,
+    current_position: PositionState | None = None,
+) -> tuple[bool, str | None]:
+    normalized_side = str(side or "").strip().upper()
+    quantity_f = max(_safe_float(quantity, 0.0), 0.0)
+    price_f = max(_safe_float(estimated_price, 0.0), 0.0)
+    fee_f = max(_safe_float(fee_amount, 0.0), 0.0)
+
+    if normalized_side == "BUY":
+        required_cash = round((quantity_f * price_f) + fee_f, 4)
+        available_cash = round(_get_internal_cash_balance(), 4)
+        if required_cash > available_cash:
+            return False, (
+                f"{symbol} buy requires ${required_cash:.2f} cash, but only ${available_cash:.2f} is available. "
+                "Cash-only execution blocks margin usage."
+            )
+        return True, None
+
+    if normalized_side == "SELL":
+        held_quantity = _safe_float(current_position.quantity if current_position else 0.0, 0.0)
+        if current_position is None or str(current_position.side).upper() != "LONG" or held_quantity <= 0:
+            return False, f"{symbol} cannot be sold because no long shares are currently held. Short selling is disabled."
+        if quantity_f - held_quantity > 1e-9:
+            return False, (
+                f"{symbol} sell quantity {quantity_f:.4f} exceeds held long quantity {held_quantity:.4f}. "
+                "Cash-only execution blocks short selling."
+            )
+        return True, None
+
+    return False, f"Unsupported order side: {normalized_side}"
 
 
 def _record_signal_alerts(repo: ExecutionRepository, strategy_mode: str, signal_snapshot: SignalSnapshot, previous_signal: SignalRecord | None) -> None:
@@ -184,6 +234,13 @@ def _apply_trade_intent(
     position is always safe).
     """
     if intent.intent == "NONE":
+        repo.append_audit_event(ExecutionEventRecord(
+            event_type="execution_intent_skipped",
+            symbol=intent.symbol,
+            strategy_mode=intent.strategy_mode,
+            correlation_id=correlation_id,
+            payload={"intent": intent.intent, "reason": intent.reason},
+        ))
         return
 
     # --- pre-trade risk gate -------------------------------------------------
@@ -232,6 +289,56 @@ def _apply_trade_intent(
     fill_audit = fill.to_audit_dict()
     # ------------------------------------------------------------------
 
+    cash_side = "BUY" if intent.intent in {"OPEN_LONG", "CLOSE_SHORT"} else "SELL"
+    current_position = None if current_row is None else PositionState(
+        id=current_row.id,
+        symbol=current_row.symbol,
+        strategy_mode=current_row.strategy_mode,
+        side=current_row.side,
+        quantity=current_row.quantity,
+        avg_entry_price=current_row.avg_entry_price,
+        current_price=current_row.current_price,
+        market_value=current_row.market_value or 0.0,
+        unrealized_pnl=current_row.unrealized_pnl or 0.0,
+        realized_pnl=current_row.realized_pnl or 0.0,
+        status=current_row.status,
+        opened_at=current_row.opened_at,
+        updated_at=current_row.updated_at,
+    )
+    cash_allowed, cash_block_reason = _validate_cash_only_order(
+        side=cash_side,
+        symbol=intent.symbol,
+        quantity=fill_qty if fill_qty > 0 else intent.quantity,
+        estimated_price=fill_price,
+        fee_amount=fill.fee_amount,
+        current_position=current_position,
+    )
+    if not cash_allowed:
+        repo.append_audit_event(ExecutionEventRecord(
+            event_type="cash_only_blocked",
+            symbol=intent.symbol,
+            strategy_mode=intent.strategy_mode,
+            correlation_id=correlation_id,
+            payload={
+                "intent": intent.intent,
+                "side": cash_side,
+                "price": fill_price,
+                "quantity": fill_qty if fill_qty > 0 else intent.quantity,
+                "reason": cash_block_reason,
+            },
+        ))
+        log_event(
+            logger,
+            logging.WARNING,
+            "execution.cash_only.blocked",
+            symbol=intent.symbol,
+            intent=intent.intent,
+            side=cash_side,
+            reason=cash_block_reason,
+            correlation_id=correlation_id,
+        )
+        return
+
     if intent.intent in {"CLOSE_LONG", "CLOSE_SHORT"} and current_row is not None:
         close_qty = fill_qty if fill_qty > 0 else float(current_row.quantity or 0.0)
         sign = 1 if current_row.side == "LONG" else -1
@@ -246,7 +353,7 @@ def _apply_trade_intent(
         ))
         # Submit SELL to Alpaca broker
         broker_side = "SELL" if intent.intent == "CLOSE_LONG" else "BUY"
-        broker_result = _submit_to_broker(intent.symbol, close_qty, broker_side)
+        broker_result = _submit_to_broker(intent.symbol, close_qty, broker_side, estimated_price=fill_price)
         broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
             event_type=intent.intent.lower(), symbol=intent.symbol,
@@ -272,7 +379,7 @@ def _apply_trade_intent(
             price=fill_price, realized_pnl=0.0, notes=fill_notes,
         ))
         # Submit to Alpaca broker
-        broker_result = _submit_to_broker(intent.symbol, fill_qty, "BUY")
+        broker_result = _submit_to_broker(intent.symbol, fill_qty, "BUY", estimated_price=fill_price)
         broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
             event_type="open_long", symbol=intent.symbol,
@@ -280,29 +387,12 @@ def _apply_trade_intent(
             payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
         ))
     elif intent.intent == "OPEN_SHORT":
-        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
-        trailing_pct = DEFAULT_TRAILING_STOP_PCT
-        trailing_stop = round(fill_price * (1 + trailing_pct / 100.0), 4)
-        repo.upsert_position(
-            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
-            side="SHORT", quantity=fill_qty, avg_entry_price=fill_price,
-            current_price=fill_price, market_value=round(fill_price * fill_qty, 4),
-            unrealized_pnl=0.0, realized_pnl=0.0, status="OPEN",
-            trailing_stop_pct=trailing_pct, trailing_stop_price=trailing_stop,
-            high_water_mark=fill_price, stop_loss_price=trailing_stop,
-        )
-        repo.append_trade(TradeRecord(
-            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
-            action="OPEN", side="SHORT", quantity=fill_qty,
-            price=fill_price, realized_pnl=0.0, notes=fill_notes,
-        ))
-        # Submit to Alpaca broker
-        broker_result = _submit_to_broker(intent.symbol, fill_qty, "SELL")
-        broker_info = broker_result if broker_result else {"skipped": True}
         repo.append_audit_event(ExecutionEventRecord(
-            event_type="open_short", symbol=intent.symbol,
-            strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
+            event_type="short_open_blocked",
+            symbol=intent.symbol,
+            strategy_mode=intent.strategy_mode,
+            correlation_id=correlation_id,
+            payload={"reason": "Cash-only execution blocks opening short positions."},
         ))
 
 
@@ -649,6 +739,47 @@ def create_paper_order(
         ask=ask_val,
     )
 
+    with session_scope() as session:
+        repo = ExecutionRepository(session)
+        current_row = repo.get_any_open_position_row(normalized_symbol)
+        current_position = None if current_row is None else PositionState(
+            id=current_row.id,
+            symbol=current_row.symbol,
+            strategy_mode=current_row.strategy_mode,
+            side=current_row.side,
+            quantity=current_row.quantity,
+            avg_entry_price=current_row.avg_entry_price,
+            current_price=current_row.current_price,
+            market_value=current_row.market_value or 0.0,
+            unrealized_pnl=current_row.unrealized_pnl or 0.0,
+            realized_pnl=current_row.realized_pnl or 0.0,
+            status=current_row.status,
+            opened_at=current_row.opened_at,
+            updated_at=current_row.updated_at,
+        )
+        cash_allowed, cash_block_reason = _validate_cash_only_order(
+            side=normalized_side,
+            symbol=normalized_symbol,
+            quantity=float(quantity),
+            estimated_price=fill.fill_price if fill.fill_price > 0 else fill_ref,
+            fee_amount=fill.fee_amount,
+            current_position=current_position,
+        )
+        if not cash_allowed:
+            repo.append_audit_event(ExecutionEventRecord(
+                event_type="paper_order_cash_only_blocked",
+                symbol=normalized_symbol,
+                strategy_mode=strategy_mode,
+                correlation_id=trace_id,
+                payload={
+                    "side": normalized_side,
+                    "quantity": float(quantity),
+                    "order_type": normalized_order_type,
+                    "reason": cash_block_reason,
+                },
+            ))
+            raise ValueError(cash_block_reason)
+
     # Determine whether the order fills immediately.
     if normalized_order_type == "market":
         order_status = "PARTIAL_FILL" if fill.is_partial else "FILLED"
@@ -748,8 +879,26 @@ def preview_paper_order(
     risk: dict = {"allowed": True, "blocked_reason": None, "warnings": []}
     if not halted:
         try:
+            with session_scope() as session:
+                repo = ExecutionRepository(session)
+                current_row = repo.get_any_open_position_row(normalized_symbol)
+                current_position = None if current_row is None else PositionState(
+                    id=current_row.id,
+                    symbol=current_row.symbol,
+                    strategy_mode=current_row.strategy_mode,
+                    side=current_row.side,
+                    quantity=current_row.quantity,
+                    avg_entry_price=current_row.avg_entry_price,
+                    current_price=current_row.current_price,
+                    market_value=current_row.market_value or 0.0,
+                    unrealized_pnl=current_row.unrealized_pnl or 0.0,
+                    realized_pnl=current_row.realized_pnl or 0.0,
+                    status=current_row.status,
+                    opened_at=current_row.opened_at,
+                    updated_at=current_row.updated_at,
+                )
             risk = check_execution_risk(
-                intent="OPEN_LONG" if normalized_side == "BUY" else "OPEN_SHORT",
+                intent="OPEN_LONG" if normalized_side == "BUY" else "CLOSE_LONG",
                 symbol=normalized_symbol,
                 quantity=float(quantity),
                 price=fill_ref,
@@ -757,6 +906,16 @@ def preview_paper_order(
             if not risk.get("allowed", True):
                 blocking_reasons.append(risk.get("blocked_reason") or "Risk gate blocked.")
             warnings_list.extend(risk.get("warnings") or [])
+            cash_allowed, cash_block_reason = _validate_cash_only_order(
+                side=normalized_side,
+                symbol=normalized_symbol,
+                quantity=float(quantity),
+                estimated_price=fill.fill_price if fill.fill_price > 0 else fill_ref,
+                fee_amount=fill.fee_amount,
+                current_position=current_position,
+            )
+            if not cash_allowed and cash_block_reason:
+                blocking_reasons.append(cash_block_reason)
         except Exception as exc:
             warnings_list.append(f"Risk gate check failed: {exc}")
 

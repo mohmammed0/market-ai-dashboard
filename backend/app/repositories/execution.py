@@ -124,6 +124,17 @@ class ExecutionRepository:
             .first()
         )
 
+    def get_any_open_position_row(self, symbol: str) -> PaperPosition | None:
+        return (
+            self.session.query(PaperPosition)
+            .filter(
+                PaperPosition.symbol == str(symbol).strip().upper(),
+                PaperPosition.status == "OPEN",
+            )
+            .order_by(PaperPosition.updated_at.desc())
+            .first()
+        )
+
     def upsert_position(
         self,
         *,

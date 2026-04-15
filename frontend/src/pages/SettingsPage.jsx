@@ -42,7 +42,7 @@ export default function SettingsPage() {
   const [alpacaMsg, setAlpacaMsg] = useState("");
   const [savingAlpaca, setSavingAlpaca] = useState(false);
   const [testingAlpaca, setTestingAlpaca] = useState(false);
-  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false });
+  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false, cycleMinutes: 30 });
 
   // Telegram state
   const [telegramForm, setTelegramForm] = useState({ botToken: "", chatId: "" });
@@ -56,7 +56,16 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!runtimeSettings) return;
-    setAlpacaForm({ enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled), paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true), apiKey: "", secretKey: "", urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "", autoTrading: Boolean(runtimeSettings?.broker?.auto_trading_enabled), orderSubmission: Boolean(runtimeSettings?.broker?.order_submission_enabled) });
+    setAlpacaForm({
+      enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled),
+      paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true),
+      apiKey: "",
+      secretKey: "",
+      urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "",
+      autoTrading: Boolean(runtimeSettings?.broker?.auto_trading_enabled),
+      orderSubmission: Boolean(runtimeSettings?.broker?.order_submission_enabled),
+      cycleMinutes: Number(runtimeSettings?.broker?.auto_trading_cycle_minutes ?? 30),
+    });
   }, [runtimeSettings]);
 
   useEffect(() => {
@@ -78,7 +87,17 @@ export default function SettingsPage() {
   async function handleSaveAlpaca() {
     setSavingAlpaca(true); setAlpacaMsg("");
     try {
-      const r = await saveAlpacaSettings({ enabled: alpacaForm.enabled, provider: "alpaca", paper: alpacaForm.paper, api_key: alpacaForm.apiKey || undefined, secret_key: alpacaForm.secretKey || undefined, url_override: alpacaForm.urlOverride, auto_trading_enabled: alpacaForm.autoTrading, order_submission_enabled: alpacaForm.orderSubmission });
+      const r = await saveAlpacaSettings({
+        enabled: alpacaForm.enabled,
+        provider: "alpaca",
+        paper: alpacaForm.paper,
+        api_key: alpacaForm.apiKey || undefined,
+        secret_key: alpacaForm.secretKey || undefined,
+        url_override: alpacaForm.urlOverride,
+        auto_trading_enabled: alpacaForm.autoTrading,
+        order_submission_enabled: alpacaForm.orderSubmission,
+        auto_trading_cycle_minutes: Number(alpacaForm.cycleMinutes || 30),
+      });
       setAlpacaMsg(r.detail || "تم الحفظ بنجاح"); setAlpacaForm((p) => ({ ...p, apiKey: "", secretKey: "" })); await refreshData();
       fetchAutoTradingConfig().then(setAutoTradingInfo).catch(() => {});
     } catch (e) { setAlpacaMsg(e.message || "فشل الحفظ"); }
@@ -135,9 +154,9 @@ export default function SettingsPage() {
 
   return (
     <PageFrame
-      title="الاعدادات"
-      description="حالة المنصة، اعدادات الذكاء، الوسيط، والاشعارات."
-      eyebrow="النظام"
+      title="الإعدادات"
+      description="مساحة إعدادات موحدة لحالة المنصة، الذكاء، الوسيط، الإشعارات، والمهام الخلفية."
+      eyebrow="Platform"
       headerActions={
         <>
           <button className="btn btn-secondary btn-sm" type="button" onClick={() => refreshData().catch(() => {})} disabled={settingsLoading}>
@@ -153,38 +172,32 @@ export default function SettingsPage() {
       <SectionCard title="حالة النظام" description="صحة المنصة والخدمات الرئيسية.">
         {settingsLoading ? <LoadingSkeleton lines={4} /> : (
           <SummaryStrip items={[
-            { label: "API Base", value: getApiBaseUrl() },
-            { label: "Backend", value: healthStatus.status, tone: toneForState(healthStatus.status) },
-            { label: "Readiness", value: readinessStatus.status, tone: toneForState(readinessStatus.status) },
-            { label: "Models", value: runtimeStatus.model, tone: toneForState(runtimeStatus.model) },
-            { label: "Scheduler", value: runtimeStatus.scheduler, tone: toneForState(runtimeStatus.scheduler) },
-            { label: "AI", value: runtimeStatus.ai, tone: toneForState(runtimeStatus.ai) },
-            { label: "Broker", value: runtimeStatus.broker, tone: toneForState(runtimeStatus.broker) },
+            { label: "عنوان API", value: getApiBaseUrl() },
+            { label: "الخلفية", value: healthStatus.status, tone: toneForState(healthStatus.status) },
+            { label: "الجاهزية", value: readinessStatus.status, tone: toneForState(readinessStatus.status) },
+            { label: "النماذج", value: runtimeStatus.model, tone: toneForState(runtimeStatus.model) },
+            { label: "الجدولة", value: runtimeStatus.scheduler, tone: toneForState(runtimeStatus.scheduler) },
+            { label: "الذكاء", value: runtimeStatus.ai, tone: toneForState(runtimeStatus.ai) },
+            { label: "الوسيط", value: runtimeStatus.broker, tone: toneForState(runtimeStatus.broker) },
           ]} />
         )}
       </SectionCard>
 
       {/* Auto-Trading Status Banner */}
       {autoTradingInfo && (
-        <div style={{
-          background: autoTradingInfo.ready ? "rgba(8,153,129,0.08)" : "rgba(255,152,0,0.08)",
-          border: `1px solid ${autoTradingInfo.ready ? "rgba(8,153,129,0.3)" : "rgba(255,152,0,0.3)"}`,
-          borderRadius: 8, padding: 16, marginBottom: 8,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{
-                width: 10, height: 10, borderRadius: "50%",
-                background: autoTradingInfo.ready ? "#089981" : "#FF9800",
-              }} />
+        <div className={`settings-banner ${autoTradingInfo.ready ? "settings-banner--positive" : "settings-banner--warning"}`}>
+          <div className="settings-banner-header">
+            <div className="settings-banner-title">
+              <span className="settings-banner-dot" />
               <span style={{ fontWeight: 700, color: "var(--tv-text)", fontSize: 14 }}>
                 التداول التلقائي: {autoTradingInfo.auto_trading_enabled ? (autoTradingInfo.ready ? "جاهز ونشط" : "مفعل (غير مكتمل)") : "معطل"}
               </span>
             </div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--tv-text-muted)" }}>
+            <div className="settings-banner-meta">
               <span>Alpaca: {autoTradingInfo.alpaca_configured ? "مفعل" : "غير مفعل"}</span>
               <span>الاوامر: {autoTradingInfo.order_submission_enabled ? "مفعل" : "معطل"}</span>
               <span>الوضع: {autoTradingInfo.alpaca_paper ? "ورقي" : "حقيقي"}</span>
+              <span>الدورة: {autoTradingInfo.cycle_minutes || 30} دقيقة</span>
             </div>
           </div>
         </div>
@@ -192,27 +205,27 @@ export default function SettingsPage() {
 
       <div className="command-grid">
         {/* Runtime Info */}
-        <SectionCard className="col-span-6" title="Runtime" description="ادوار التشغيل والبيئة.">
+        <SectionCard className="col-span-6" title="بيئة التشغيل" description="ادوار التشغيل والبيئة.">
           {settingsLoading ? <LoadingSkeleton lines={3} /> : (
             <div className="settings-group">
               <div className="settings-row">
-                <span className="settings-row-label">Server Role</span>
+                <span className="settings-row-label">دور الخادم</span>
                 <span className="settings-row-value">{processSummary?.server_role || "-"}</span>
               </div>
               <div className="settings-row">
-                <span className="settings-row-label">Process Mode</span>
+                <span className="settings-row-label">وضع العملية</span>
                 <span className="settings-row-value">{processSummary?.process_mode || "-"}</span>
               </div>
               <div className="settings-row">
-                <span className="settings-row-label">Scheduler Role</span>
+                <span className="settings-row-label">دور المجدول</span>
                 <span className="settings-row-value">{processSummary?.scheduler_runner_role || "-"}</span>
               </div>
               <div className="settings-row">
-                <span className="settings-row-label">Environment</span>
+                <span className="settings-row-label">البيئة</span>
                 <span className="settings-row-value">{envBootstrap?.mode || "-"}</span>
               </div>
               <div className="settings-row">
-                <span className="settings-row-label">CL State</span>
+                <span className="settings-row-label">حالة التعلم المستمر</span>
                 <span className="settings-row-value">{orchestrationSummary?.continuous_learning?.runtime_state || "-"}</span>
               </div>
             </div>
@@ -220,7 +233,7 @@ export default function SettingsPage() {
         </SectionCard>
 
         {/* Ollama / LLM Status */}
-        <SectionCard className="col-span-6" title="Ollama / AI" description="حالة محرك الذكاء الاصطناعي المحلي.">
+        <SectionCard className="col-span-6" title="Ollama / الذكاء" description="حالة محرك الذكاء الاصطناعي المحلي.">
           <div className="settings-group">
             <div className="settings-row">
               <span className="settings-row-label">المزود النشط</span>
@@ -236,7 +249,7 @@ export default function SettingsPage() {
             </div>
             <div className="settings-row">
               <span className="settings-row-label">النموذج</span>
-              <span className="settings-row-value">{llmStatus?.ollama?.model || llmStatus?.openai?.model || "-"}</span>
+              <span className="settings-row-value">{llmStatus?.ollama?.model || "-"}</span>
             </div>
             {llmMsg && <div className="info-banner">{llmMsg}</div>}
             <div className="form-actions">
@@ -246,7 +259,7 @@ export default function SettingsPage() {
         </SectionCard>
 
         {/* Alpaca Broker */}
-        <SectionCard className="col-span-6" title="Alpaca Broker" description="اعدادات وسيط التداول.">
+        <SectionCard className="col-span-6" title="وسيط Alpaca" description="اعدادات وسيط التداول.">
           <div className="settings-group">
             <div className="settings-row">
               <span className="settings-row-label">مفعل</span>
@@ -256,22 +269,22 @@ export default function SettingsPage() {
               </label>
             </div>
             <div className="settings-row">
-              <span className="settings-row-label">Paper Mode</span>
+              <span className="settings-row-label">الوضع الورقي</span>
               <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                 <input type="checkbox" checked={alpacaForm.paper} onChange={(e) => setAlpacaForm((p) => ({ ...p, paper: e.target.checked }))} />
                 <span className="text-sm">{alpacaForm.paper ? "ورقي" : "حي"}</span>
               </label>
             </div>
             <div className="settings-row">
-              <span className="settings-row-label">API Key</span>
+              <span className="settings-row-label">مفتاح API</span>
               <input className="form-input" style={{ width: "220px" }} type="password" placeholder="PK..." value={alpacaForm.apiKey} onChange={(e) => setAlpacaForm((p) => ({ ...p, apiKey: e.target.value }))} />
             </div>
             <div className="settings-row">
-              <span className="settings-row-label">Secret Key</span>
+              <span className="settings-row-label">المفتاح السري</span>
               <input className="form-input" style={{ width: "220px" }} type="password" placeholder="..." value={alpacaForm.secretKey} onChange={(e) => setAlpacaForm((p) => ({ ...p, secretKey: e.target.value }))} />
             </div>
             <div className="settings-row" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-3)", marginTop: "var(--space-2)" }}>
-              <span className="settings-row-label" style={{ fontWeight: 600 }}>Order Submission</span>
+              <span className="settings-row-label" style={{ fontWeight: 600 }}>إرسال الأوامر</span>
               <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                 <input type="checkbox" checked={alpacaForm.orderSubmission} onChange={(e) => setAlpacaForm((p) => ({ ...p, orderSubmission: e.target.checked }))} />
                 <span className="text-sm">{alpacaForm.orderSubmission ? "مفعل" : "معطل"}</span>
@@ -284,9 +297,26 @@ export default function SettingsPage() {
                 <span className="text-sm" style={{ color: alpacaForm.autoTrading ? "var(--accent-success)" : "inherit" }}>{alpacaForm.autoTrading ? "مفعل" : "معطل"}</span>
               </label>
             </div>
+            <div className="settings-row">
+              <span className="settings-row-label">كل كم دقيقة يفحص السوق</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <input
+                  className="form-input"
+                  style={{ width: "110px" }}
+                  type="number"
+                  min="1"
+                  max="720"
+                  step="1"
+                  value={alpacaForm.cycleMinutes}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, cycleMinutes: e.target.value }))}
+                />
+                <span className="text-sm">دقيقة</span>
+              </div>
+            </div>
             {alpacaForm.autoTrading && (
               <div className="info-banner" style={{ background: "var(--surface-success, #e8f5e9)", borderRadius: 8, padding: "var(--space-2) var(--space-3)" }}>
-                التداول التلقائي مفعل — النظام سيحلل السوق كل 30 دقيقة وينفذ اوامر الشراء تلقائيا على الفرص المكتشفة في البيئة التجريبية
+                التداول التلقائي مفعل — النظام سيفحص السوق كل {Number(alpacaForm.cycleMinutes || 30)} دقيقة
+                ويبدأ دورة التداول الورقي تلقائيًا على الفرص المكتشفة في البيئة التجريبية.
               </div>
             )}
             {alpacaMsg && <div className="info-banner">{alpacaMsg}</div>}
@@ -309,12 +339,12 @@ export default function SettingsPage() {
             </div>
             {telegramStatus?.configured && (
               <div className="settings-row">
-                <span className="settings-row-label">Bot</span>
+                <span className="settings-row-label">البوت</span>
                 <span className="settings-row-value" style={{ fontSize: 12 }}>{telegramStatus?.bot_username || "متصل"}</span>
               </div>
             )}
             <div className="settings-row">
-              <span className="settings-row-label">Bot Token</span>
+              <span className="settings-row-label">رمز البوت</span>
               <input
                 className="form-input"
                 style={{ width: "280px" }}
@@ -325,7 +355,7 @@ export default function SettingsPage() {
               />
             </div>
             <div className="settings-row">
-              <span className="settings-row-label">Chat ID</span>
+              <span className="settings-row-label">معرّف المحادثة</span>
               <input
                 className="form-input"
                 style={{ width: "180px" }}
@@ -360,12 +390,12 @@ export default function SettingsPage() {
         </SectionCard>
 
         {/* Jobs */}
-        <SectionCard className="col-span-6" title="Background Jobs" description="اخر الوظائف الخلفية.">
+        <SectionCard className="col-span-6" title="المهام الخلفية" description="اخر الوظائف الخلفية.">
           <SummaryStrip compact items={[
-            { label: "Running", value: jobCounts.running, tone: jobCounts.running ? "warning" : "neutral" },
-            { label: "Pending", value: jobCounts.pending },
-            { label: "Completed", value: jobCounts.completed, tone: "positive" },
-            { label: "Failed", value: jobCounts.failed, tone: jobCounts.failed ? "negative" : "neutral" },
+            { label: "قيد التشغيل", value: jobCounts.running, tone: jobCounts.running ? "warning" : "neutral" },
+            { label: "بانتظار التنفيذ", value: jobCounts.pending },
+            { label: "مكتملة", value: jobCounts.completed, tone: "positive" },
+            { label: "فاشلة", value: jobCounts.failed, tone: jobCounts.failed ? "negative" : "neutral" },
           ]} />
           <div style={{ marginTop: "var(--space-3)" }}>
             {jobsLoading ? <LoadingSkeleton lines={3} /> : (

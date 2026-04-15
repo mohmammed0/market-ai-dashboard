@@ -15,7 +15,7 @@ from backend.app.services import get_cache
 from backend.app.services.breadth_engine import compute_sector_rotation
 from backend.app.services.events_calendar import fetch_market_events
 from backend.app.services.market_data import fetch_quote_snapshots, load_history
-from backend.app.services.openai_client import get_openai_runtime_status
+from backend.app.services.llm_gateway import get_llm_status
 from backend.app.services.risk_engine import get_risk_dashboard
 from backend.app.services.strategy_lab import list_strategy_evaluations
 
@@ -187,10 +187,10 @@ def _lightweight_market_intelligence() -> dict[str, Any]:
         lambda: fetch_market_events(symbols=sample_symbols, limit=6),
         {"items": [], "note": "Event data is not currently available."},
     )
-    openai_status = _safe_call(
-        "openai_status",
-        get_openai_runtime_status,
-        {"enabled": False, "detail": "OpenAI runtime status is unavailable."},
+    llm_status = _safe_call(
+        "llm_status",
+        get_llm_status,
+        {"effective_status": "unavailable", "effective_provider": None},
     )
     watchlist_opportunities = sorted(
         snapshots,
@@ -210,8 +210,9 @@ def _lightweight_market_intelligence() -> dict[str, Any]:
         "sector_strength": sector_rotation.get("leaders", []),
         "sector_weakness": sector_rotation.get("laggards", []),
         "news_sentiment_summary": {
-            "openai_enabled": bool(openai_status.get("enabled")),
-            "detail": openai_status.get("detail"),
+            "llm_ready": llm_status.get("effective_status") == "ready",
+            "provider": llm_status.get("effective_provider"),
+            "detail": llm_status.get("ollama", {}).get("detail") or llm_status.get("effective_status"),
         },
         "watchlist_opportunities": watchlist_opportunities,
         "events": events.get("items", [])[:6],

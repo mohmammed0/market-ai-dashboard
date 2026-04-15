@@ -66,3 +66,10 @@ class BrokerSummary(BaseModel):
     positions: list[BrokerPosition] = Field(default_factory=list)
     orders: list[BrokerOrder] = Field(default_factory=list)
     totals: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrokerSummaryResponse(BrokerStatus):
+    account: BrokerAccount | None = None
+    positions: list[BrokerPosition] = Field(default_factory=list)
+    orders: list[BrokerOrder] = Field(default_factory=list)
+    totals: dict[str, Any] = Field(default_factory=dict)

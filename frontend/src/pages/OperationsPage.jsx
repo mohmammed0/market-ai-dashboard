@@ -283,7 +283,7 @@ export default function OperationsPage() {
               emptyDescription="شغّل scripts/backup_runtime.py على الخادم أو ضمن cron/systemd لإنشاء أول نسخة."
             />
             <div style={{ marginTop: "var(--space-3)", display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-              <div className="status-message warning">المفاتيح السرية لا تُحفظ بشكل مكشوف داخل النسخة. استرجاع أسرار OpenAI وAlpaca يتطلب إما إعادة إدخالها من الواجهة أو إدارة منفصلة وآمنة لمفتاح التشفير.</div>
+              <div className="status-message warning">المفاتيح السرية لا تُحفظ بشكل مكشوف داخل النسخة. استرجاع بيانات الوسيط وأي أسرار تشغيل محفوظة يتطلب إما إعادة إدخالها من الواجهة أو إدارة منفصلة وآمنة لمفتاح التشفير.</div>
               <div className="status-message">الأوامر المقترحة: `python scripts/backup_runtime.py --include-logs` للنسخ، و`python scripts/restore_runtime.py backups/[archive].tar.gz --force` للاستعادة داخل بيئة صيانة.</div>
             </div>
           </>

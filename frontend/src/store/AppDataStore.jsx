@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
+import { getJson } from "../api/client";
+
 const AppDataContext = createContext(null);
 
 export function AppDataProvider({ children }) {
@@ -9,16 +11,13 @@ export function AppDataProvider({ children }) {
     setStore(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...patch } }));
   }
 
-  async function fetchSection(key, url) {
+  async function fetchSection(key, url, options = {}) {
     updateSection(key, { loading: true });
     try {
-      const token = localStorage.getItem("market_ai_token");
-      const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        signal: AbortSignal.timeout(12000),
+      const data = await getJson(url, {
+        cacheTtlMs: options.cacheTtlMs ?? 0,
+        forceFresh: options.forceFresh ?? false,
       });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const data = await res.json();
       updateSection(key, { data, loading: false, error: null, lastFetch: Date.now() });
     } catch (e) {
       updateSection(key, { loading: false, error: e.message });
@@ -26,30 +25,17 @@ export function AppDataProvider({ children }) {
   }
 
   useEffect(() => {
-    const today = new Date();
-    const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
-
     const sections = [
-      { key: "marketOverview",  url: "/api/market/overview",           interval: 60000  },
-      { key: "newsFeed",        url: `/api/ai/news/feed?date=${dateStr}&limit=50`, interval: 60000 },
-      { key: "paperPortfolio",  url: "/api/paper/portfolio",           interval: 30000  },
-      { key: "paperOrders",     url: "/api/paper/orders",              interval: 30000  },
-      { key: "paperTrades",     url: "/api/paper/trades",              interval: 60000  },
-      { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000  },
-      { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000 },
-      { key: "brokerStatus",    url: "/api/broker/status",             interval: 60000  },
-      { key: "brokerSummary",   url: "/api/broker/summary",            interval: 30000  },
-      { key: "macroCal",        url: "/api/macro/calendar",            interval: 3600000 },
-      // New sections for UI overhaul
-      { key: "autoTrading",     url: "/api/settings/runtime/auto-trading", interval: 30000 },
-      { key: "automationStatus",url: "/api/automation/status",         interval: 45000  },
-      { key: "telegramStatus",  url: "/api/notifications/telegram/status", interval: 120000 },
+      { key: "dashboardLite",   url: "/api/dashboard/lite",            interval: 45000, cacheTtlMs: 5000 },
+      { key: "portfolioSnapshot", url: "/api/portfolio/snapshot",      interval: 30000, cacheTtlMs: 5000 },
+      { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000, cacheTtlMs: 5000 },
+      { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000, cacheTtlMs: 15000 },
     ];
 
     const timers = [];
-    sections.forEach(({ key, url, interval }) => {
-      fetchSection(key, url);
-      const t = setInterval(() => fetchSection(key, url), interval);
+    sections.forEach(({ key, url, interval, cacheTtlMs }) => {
+      fetchSection(key, url, { cacheTtlMs, forceFresh: true });
+      const t = setInterval(() => fetchSection(key, url, { cacheTtlMs }), interval);
       timers.push(t);
     });
 

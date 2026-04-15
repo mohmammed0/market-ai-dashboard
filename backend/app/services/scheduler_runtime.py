@@ -7,7 +7,6 @@ from backend.app.config import (
     AUTOMATION_DAILY_SUMMARY_HOUR,
     BREADTH_CYCLE_MINUTES,
     AUTONOMOUS_CYCLE_HOURS,
-    AUTO_TRADING_ENABLED,
     AUTO_TRADING_CYCLE_MINUTES,
     CONTINUOUS_LEARNING_STARTUP_ENABLED,
     ENABLE_AUTO_RETRAIN,
@@ -157,6 +156,36 @@ def _run_smart_cycle_job():
         _record_job("smart_cycle", "error", str(exc))
 
 
+def _runtime_auto_trading_cycle_minutes() -> int:
+    try:
+        from backend.app.services.runtime_settings import get_auto_trading_config
+
+        cycle_minutes = int(get_auto_trading_config().get("cycle_minutes") or AUTO_TRADING_CYCLE_MINUTES)
+        return max(1, min(cycle_minutes, 720))
+    except Exception:
+        return max(1, int(AUTO_TRADING_CYCLE_MINUTES))
+
+
+def sync_auto_trading_schedule() -> dict:
+    if _scheduler is None:
+        return {"updated": False, "reason": "scheduler_not_initialized"}
+
+    minutes = _runtime_auto_trading_cycle_minutes()
+    job = _scheduler.get_job("auto_trading_cycle")
+    if job is None:
+        _scheduler.add_job(
+            lambda: _run_automation_job("auto_trading_cycle"),
+            "interval",
+            minutes=minutes,
+            id="auto_trading_cycle",
+            replace_existing=True,
+        )
+        return {"updated": True, "action": "added", "minutes": minutes}
+
+    job.reschedule(trigger="interval", minutes=minutes)
+    return {"updated": True, "action": "rescheduled", "minutes": minutes}
+
+
 def start_scheduler():
     global _scheduler, _jobs_registered, _last_continuous_learning_start_result
     blocked_reason = _scheduler_blocked_reason()
@@ -192,15 +221,15 @@ def start_scheduler():
             _scheduler.add_job(lambda: _run_automation_job("autonomous_cycle"), "interval", hours=AUTONOMOUS_CYCLE_HOURS, id="autonomous_cycle", replace_existing=True)
         # Trailing stop monitor — check every 5 minutes
         _scheduler.add_job(_run_trailing_stop_job, "interval", minutes=5, id="trailing_stop_check", replace_existing=True)
-        # Auto-trading — signal-driven paper trading
-        if AUTO_TRADING_ENABLED:
-            _scheduler.add_job(
-                lambda: _run_automation_job("auto_trading_cycle"),
-                "interval",
-                minutes=AUTO_TRADING_CYCLE_MINUTES,
-                id="auto_trading_cycle",
-                replace_existing=True,
-            )
+        # Auto-trading — signal-driven paper trading.
+        # The job always exists; runtime settings decide whether each cycle acts or skips.
+        _scheduler.add_job(
+            lambda: _run_automation_job("auto_trading_cycle"),
+            "interval",
+            minutes=_runtime_auto_trading_cycle_minutes(),
+            id="auto_trading_cycle",
+            replace_existing=True,
+        )
         # Smart automation — AI-powered opportunity scanner
         try:
             _scheduler.add_job(_run_smart_cycle_job, "interval", minutes=45, id="smart_cycle", replace_existing=True)

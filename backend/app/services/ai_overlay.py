@@ -1,10 +1,10 @@
 """AI Coordinator / Overlay Layer.
 
 Consumes a deterministic ``DecisionPackage`` and enriches the ``ai_layer``
-using an LLM (OpenAI) when available.  Falls back silently to the
+using the local AI runtime when available. Falls back silently to the
 deterministic explanation already embedded in the package if:
 
-- OpenAI is not configured
+- The AI runtime is not configured
 - The API call fails or times out
 - The response is malformed
 
@@ -298,7 +298,7 @@ def enrich_with_ai_overlay(package: DecisionPackage) -> DecisionPackage:
             strategy_ctx=strategy_ctx,
         )
 
-        # Try LLM gateway first (unified Ollama/OpenAI interface)
+        # Route through the unified local LLM gateway.
         llm_response = llm_chat(
             messages=[
                 {

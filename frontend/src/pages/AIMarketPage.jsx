@@ -1,713 +1,386 @@
-/**
- * AIMarketPage v2 — محطة السوق بالذكاء الاصطناعي
- * شارت TradingView الاحترافي + لوحة تحليل AI كاملة
- */
-import { useState, useEffect, useCallback, useRef } from "react";
-import TradingViewWidget, { normalizeSymbol } from "../components/charts/TradingViewWidget";
-import {
-  fetchSymbolSignal,
-  fetchMacroCalendar,
-  fetchFundamentals,
-  calculateKelly,
-  fetchQuoteSnapshot,
-} from "../api/intelligence";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-const QUICK_SYMBOLS = [
-  { sym: "AAPL",  label: "آبل",      icon: "🍎" },
-  { sym: "MSFT",  label: "مايكروسوفت", icon: "🪟" },
-  { sym: "NVDA",  label: "إنفيديا",  icon: "🎮" },
-  { sym: "TSLA",  label: "تسلا",     icon: "⚡" },
-  { sym: "SPY",   label: "S&P 500",  icon: "📈" },
-  { sym: "META",  label: "ميتا",     icon: "👓" },
-  { sym: "GOOGL", label: "جوجل",     icon: "🔍" },
-  { sym: "AMZN",  label: "أمازون",   icon: "📦" },
-];
+import TradingViewWidget from "../components/charts/TradingViewWidget";
+import DecisionPanel from "../components/ui/DecisionPanel";
+import EmptyState from "../components/ui/EmptyState";
+import ErrorBanner from "../components/ui/ErrorBanner";
+import LoadingSkeleton from "../components/ui/LoadingSkeleton";
+import MetricCard from "../components/ui/MetricCard";
+import PageFrame from "../components/ui/PageFrame";
+import SectionCard from "../components/ui/SectionCard";
+import StatusBadge from "../components/ui/StatusBadge";
+import SymbolPicker from "../components/ui/SymbolPicker";
+import { fetchFundamentals, fetchMacroCalendar, fetchQuoteSnapshot, fetchSymbolSignal } from "../api/intelligence";
+import useDecisionSurface from "../hooks/useDecisionSurface";
+import { useWorkspace } from "../lib/useWorkspace";
 
-const INTERVALS = [
-  { key: "1",   label: "1د" },
-  { key: "5",   label: "5د" },
-  { key: "15",  label: "15د" },
-  { key: "60",  label: "ساعة" },
-  { key: "D",   label: "يوم" },
-  { key: "W",   label: "أسبوع" },
-  { key: "M",   label: "شهر" },
-];
-
+const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ"];
+const INTERVALS = ["15", "60", "D", "W"];
 const CHART_STYLES = [
   { key: "1", label: "شموع" },
-  { key: "2", label: "بارات" },
   { key: "3", label: "خط" },
   { key: "8", label: "Heikin Ashi" },
 ];
 
-// ─── Styles ─────────────────────────────────────────────────────────────────
-const S = {
-  page: {
-    minHeight: "100vh",
-    background: "#020617",
-    color: "#f1f5f9",
-    fontFamily: "'Inter', 'Cairo', sans-serif",
-    direction: "rtl",
-  },
-  header: {
-    background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
-    borderBottom: "1px solid #1e293b",
-    padding: "12px 20px",
-    display: "flex",
-    alignItems: "center",
-    gap: "16px",
-    flexWrap: "wrap",
-  },
-  logo: {
-    fontSize: "18px",
-    fontWeight: "700",
-    color: "#3b82f6",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    whiteSpace: "nowrap",
-  },
-  searchBox: {
-    display: "flex",
-    alignItems: "center",
-    background: "#1e293b",
-    border: "1px solid #334155",
-    borderRadius: "8px",
-    padding: "6px 12px",
-    gap: "8px",
-    flex: 1,
-    maxWidth: "300px",
-  },
-  searchInput: {
-    background: "none",
-    border: "none",
-    outline: "none",
-    color: "#f1f5f9",
-    fontSize: "14px",
-    width: "100%",
-    textAlign: "right",
-  },
-  quickBtn: (active) => ({
-    padding: "5px 12px",
-    borderRadius: "20px",
-    border: `1px solid ${active ? "#3b82f6" : "#334155"}`,
-    background: active ? "#1d4ed8" : "#1e293b",
-    color: active ? "#fff" : "#94a3b8",
-    cursor: "pointer",
-    fontSize: "12px",
-    fontWeight: active ? "600" : "400",
-    display: "flex",
-    alignItems: "center",
-    gap: "4px",
-    transition: "all 0.2s",
-    whiteSpace: "nowrap",
-  }),
-  body: {
-    display: "grid",
-    gridTemplateColumns: "1fr 340px",
-    gap: "0",
-    height: "calc(100vh - 130px)",
-  },
-  chartSection: {
-    display: "flex",
-    flexDirection: "column",
-    borderLeft: "1px solid #1e293b",
-  },
-  chartToolbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    padding: "8px 16px",
-    background: "#0f172a",
-    borderBottom: "1px solid #1e293b",
-    flexWrap: "wrap",
-  },
-  intervalBtn: (active) => ({
-    padding: "4px 10px",
-    borderRadius: "6px",
-    border: `1px solid ${active ? "#3b82f6" : "#334155"}`,
-    background: active ? "#1d4ed820" : "transparent",
-    color: active ? "#60a5fa" : "#64748b",
-    cursor: "pointer",
-    fontSize: "12px",
-    fontWeight: active ? "600" : "400",
-    transition: "all 0.15s",
-  }),
-  styleBtn: (active) => ({
-    padding: "4px 8px",
-    borderRadius: "6px",
-    border: `1px solid ${active ? "#8b5cf6" : "#334155"}`,
-    background: active ? "#7c3aed20" : "transparent",
-    color: active ? "#a78bfa" : "#64748b",
-    cursor: "pointer",
-    fontSize: "11px",
-    transition: "all 0.15s",
-  }),
-  chartWrapper: {
-    flex: 1,
-    minHeight: 0,
-  },
-  sidebar: {
-    background: "#0f172a",
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "1px",
-  },
-  card: {
-    background: "#0f172a",
-    borderBottom: "1px solid #1e293b",
-    padding: "16px",
-  },
-  cardTitle: {
-    fontSize: "11px",
-    fontWeight: "700",
-    color: "#64748b",
-    textTransform: "uppercase",
-    letterSpacing: "0.08em",
-    marginBottom: "12px",
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-  },
-  priceDisplay: {
-    fontSize: "28px",
-    fontWeight: "700",
-    color: "#f1f5f9",
-    lineHeight: 1.2,
-  },
-  changeDisplay: (positive) => ({
-    fontSize: "14px",
-    fontWeight: "600",
-    color: positive ? "#22c55e" : "#ef4444",
-    display: "flex",
-    alignItems: "center",
-    gap: "4px",
-  }),
-  signalBadge: (score) => {
-    let bg, color;
-    if (score >= 65) { bg = "#14532d"; color = "#22c55e"; }
-    else if (score <= 35) { bg = "#7f1d1d"; color = "#ef4444"; }
-    else { bg = "#78350f"; color = "#f59e0b"; }
-    return {
-      display: "inline-flex", alignItems: "center", gap: "6px",
-      padding: "6px 14px", borderRadius: "20px",
-      background: bg, color, fontWeight: "700", fontSize: "15px",
-    };
-  },
-  scoreBar: (score) => ({
-    height: "6px",
-    borderRadius: "3px",
-    background: `linear-gradient(90deg, 
-      ${score >= 65 ? "#22c55e" : score <= 35 ? "#ef4444" : "#f59e0b"} ${score}%, 
-      #1e293b ${score}%)`,
-    marginTop: "6px",
-  }),
-  metaRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "5px 0",
-    borderBottom: "1px solid #0f172a",
-    fontSize: "13px",
-  },
-  metaLabel: { color: "#64748b" },
-  metaValue: { color: "#e2e8f0", fontWeight: "500" },
-  macroChip: (regime) => {
-    const isOn = String(regime||"").includes("risk_on");
-    const isOff = String(regime||"").includes("risk_off");
-    return {
-      display: "inline-flex", alignItems: "center", gap: "6px",
-      padding: "5px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: "600",
-      background: isOn ? "#14532d" : isOff ? "#7f1d1d" : "#1e293b",
-      color: isOn ? "#22c55e" : isOff ? "#ef4444" : "#f59e0b",
-    };
-  },
-  indicator: {
-    display: "flex",
-    justifyContent: "space-between",
-    padding: "4px 0",
-    fontSize: "12px",
-    borderBottom: "1px solid #1e293b",
-  },
-  loaderDot: {
-    display: "inline-block",
-    width: "8px", height: "8px", borderRadius: "50%",
-    background: "#3b82f6",
-    animation: "pulse 1s infinite",
-  },
-  refreshBtn: {
-    marginRight: "auto",
-    padding: "3px 8px",
-    borderRadius: "5px",
-    border: "1px solid #334155",
-    background: "transparent",
-    color: "#64748b",
-    cursor: "pointer",
-    fontSize: "11px",
-  },
-  symbolDisplay: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "8px",
-  },
-  currentSymbol: {
-    fontSize: "22px",
-    fontWeight: "800",
-    color: "#f1f5f9",
-  },
-  currentName: {
-    fontSize: "12px",
-    color: "#64748b",
-  },
-};
-
-// ─── Helper functions ────────────────────────────────────────────────────────
-function fmt(v, d = 2) {
-  if (v == null || isNaN(Number(v))) return "—";
-  return Number(v).toFixed(d);
-}
-function fmtBig(v) {
-  if (v == null || isNaN(Number(v))) return "—";
-  const n = Number(v);
-  if (Math.abs(n) >= 1e12) return `$${(n/1e12).toFixed(2)}T`;
-  if (Math.abs(n) >= 1e9)  return `$${(n/1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6)  return `$${(n/1e6).toFixed(2)}M`;
-  return `$${n.toFixed(2)}`;
-}
-function signalText(score) {
-  if (score == null) return "—";
-  if (score >= 65) return "شراء قوي 🟢";
-  if (score >= 55) return "شراء 🟩";
-  if (score <= 35) return "بيع قوي 🔴";
-  if (score <= 45) return "بيع 🟥";
-  return "محايد 🟡";
-}
-function regimeLabel(r) {
-  if (!r) return "—";
-  const s = String(r).toLowerCase();
-  if (s.includes("risk_on"))  return "توسعي 🟢";
-  if (s.includes("risk_off")) return "انكماشي 🔴";
-  return "محايد 🟡";
+function money(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return `$${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+function number(value, digits = 2) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(digits);
+}
 
-function QuoteCard({ symbol, quote, signal, loading }) {
-  const pos = (quote?.change_pct ?? 0) >= 0;
+function percent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  const amount = Number(value);
+  return `${amount >= 0 ? "+" : ""}${amount.toFixed(2)}%`;
+}
+
+function signalTone(signal) {
+  const normalized = String(signal || "").trim().toUpperCase();
+  if (normalized === "BUY" || normalized === "BULLISH") return "positive";
+  if (normalized === "SELL" || normalized === "BEARISH") return "negative";
+  if (normalized === "HOLD" || normalized === "NEUTRAL") return "warning";
+  return "neutral";
+}
+
+function quoteTone(changePct) {
+  return Number(changePct || 0) >= 0 ? "positive" : "negative";
+}
+
+function compactDate(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString("ar-SA", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function SignalHero({ symbol, signal, quote, loading }) {
+  const activeSignal = signal?.signal || "HOLD";
+  const signalPrice = signal?.price ?? quote?.price ?? quote?.current_price;
+  const changePct = quote?.change_pct ?? quote?.day_change_pct ?? 0;
+  const confidence = signal?.confidence ?? signal?.score ?? 0;
+
+  if (loading) {
+    return (
+      <div className="analysis-hero-card">
+        <LoadingSkeleton lines={5} />
+      </div>
+    );
+  }
+
   return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>
-        <span>💹</span> السعر الحالي
-        {loading && <span style={S.loaderDot} />}
-      </div>
-      <div style={S.symbolDisplay}>
-        <span style={S.currentSymbol}>{symbol}</span>
-        {quote?.name && <span style={S.currentName}>{quote.name}</span>}
-      </div>
-      <div style={{ ...S.priceDisplay, marginTop: "8px" }}>
-        ${fmt(quote?.price)}
-      </div>
-      <div style={{ ...S.changeDisplay(pos), marginTop: "4px" }}>
-        {pos ? "▲" : "▼"} {fmt(Math.abs(quote?.change_pct))}%
-        <span style={{ color: "#64748b", fontWeight: "400", fontSize: "12px", marginRight: "4px" }}>
-          ({pos ? "+" : ""}{fmt(quote?.change)})
-        </span>
-      </div>
-      {quote && (
-        <div style={{ marginTop: "10px" }}>
-          {[
-            ["الافتتاح", `$${fmt(quote.open)}`],
-            ["الأعلى",  `$${fmt(quote.high)}`],
-            ["الأدنى",  `$${fmt(quote.low)}`],
-            ["الحجم",   Number(quote.volume||0).toLocaleString()],
-          ].map(([k,v]) => (
-            <div key={k} style={S.metaRow}>
-              <span style={S.metaLabel}>{k}</span>
-              <span style={S.metaValue}>{v}</span>
-            </div>
-          ))}
+    <div className="analysis-hero-card">
+      <div className="analysis-hero-topline">
+        <div>
+          <span className="analysis-hero-kicker">AI Signal Surface</span>
+          <h2>{symbol}</h2>
         </div>
-      )}
-    </div>
-  );
-}
-
-function SignalCard({ signal, loading }) {
-  const score = signal?.score ?? 50;
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}><span>🤖</span> إشارة الذكاء الاصطناعي</div>
-      {loading ? (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>جاري التحليل...</div>
-      ) : signal ? (
-        <>
-          <div style={{ marginBottom: "10px" }}>
-            <span style={S.signalBadge(score)}>{signalText(score)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#64748b", marginBottom: "4px" }}>
-            <span>قوة الإشارة</span>
-            <span style={{ color: "#f1f5f9", fontWeight: "600" }}>{score}/100</span>
-          </div>
-          <div style={S.scoreBar(score)} />
-          {signal.change_pct != null && (
-            <div style={{ marginTop: "10px", fontSize: "12px", color: "#94a3b8" }}>
-              التغيّر اليوم: <strong style={{ color: signal.change_pct >= 0 ? "#22c55e" : "#ef4444" }}>
-                {signal.change_pct >= 0 ? "+" : ""}{fmt(signal.change_pct)}%
-              </strong>
-            </div>
-          )}
-        </>
-      ) : (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>لا توجد بيانات</div>
-      )}
-    </div>
-  );
-}
-
-function MacroCard({ macro, loading, onRefresh }) {
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}>
-        <span>🌍</span> البيئة الاقتصادية
-        <button style={S.refreshBtn} onClick={onRefresh} title="تحديث">↻</button>
+        <StatusBadge label={activeSignal} tone={signalTone(activeSignal)} />
       </div>
-      {loading ? (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>جاري التحميل...</div>
-      ) : macro ? (
-        <>
-          <div style={{ marginBottom: "10px" }}>
-            <span style={S.macroChip(macro.regime)}>{regimeLabel(macro.regime)}</span>
+
+      <div className="analysis-hero-main">
+        <div>
+          <div className="analysis-hero-price">{money(signalPrice)}</div>
+          <div className={`analysis-hero-change ${Number(changePct || 0) >= 0 ? "quote-positive" : "quote-negative"}`}>{percent(changePct)}</div>
+        </div>
+        <div className="analysis-hero-metrics">
+          <div>
+            <span>الثقة</span>
+            <strong>{number(confidence, 0)}%</strong>
           </div>
-          {macro.score != null && (
-            <>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#64748b", marginBottom: "4px" }}>
-                <span>درجة الاقتصاد</span>
-                <span style={{ color: "#f1f5f9", fontWeight: "600" }}>{fmt(macro.score, 1)}/100</span>
-              </div>
-              <div style={S.scoreBar(macro.score)} />
-            </>
-          )}
-          {macro.indicators && macro.indicators.length > 0 && (
-            <div style={{ marginTop: "10px" }}>
-              {macro.indicators.slice(0, 4).map((ind) => (
-                <div key={ind.name} style={S.indicator}>
-                  <span style={{ color: "#64748b" }}>{ind.label || ind.name}</span>
-                  <span style={{ color: "#e2e8f0" }}>{fmt(ind.value, ind.decimals ?? 2)}{ind.unit || ""}</span>
-                </div>
+          <div>
+            <span>النتيجة</span>
+            <strong>{number(signal?.score ?? confidence, 0)}</strong>
+          </div>
+          <div>
+            <span>الوضع</span>
+            <strong>{signal?.mode || "ensemble"}</strong>
+          </div>
+        </div>
+      </div>
+
+      <p className="analysis-hero-reasoning">
+        {signal?.reasoning || "الإشارة الحالية مأخوذة من العقد canonical على الباك إند. ستظهر الأسباب هنا عندما تتوفر طبقة الشرح."}
+      </p>
+    </div>
+  );
+}
+
+function QuoteBoard({ quotePayload, loading }) {
+  if (loading) {
+    return <LoadingSkeleton lines={5} />;
+  }
+
+  const metadata = quotePayload?.metadata || {};
+  const quote = quotePayload?.quote || {};
+
+  return (
+    <div className="analysis-mini-grid">
+      <MetricCard label="السعر" value={money(quote?.price)} detail={quote?.exchange || metadata?.exchange || "—"} tone="accent" />
+      <MetricCard label="التغير اليومي" value={percent(quote?.change_pct)} detail={money(quote?.change)} tone={quoteTone(quote?.change_pct)} />
+      <MetricCard label="الحجم" value={quote?.volume != null ? Number(quote.volume).toLocaleString("en-US") : "—"} detail="Volume" />
+      <MetricCard label="القيمة السوقية" value={quote?.market_cap != null ? `$${Number(quote.market_cap).toLocaleString("en-US")}` : "—"} detail="Market Cap" />
+      <MetricCard label="الرمز" value={quotePayload?.symbol || "—"} detail={metadata?.security_name || quote?.security_name || "—"} />
+      <MetricCard label="آخر تحديث" value={compactDate(quote?.fetched_at || quotePayload?.history?.generated_at)} detail="Snapshot" />
+    </div>
+  );
+}
+
+function FundamentalsBoard({ fundamentals, loading }) {
+  if (loading) {
+    return <LoadingSkeleton lines={5} />;
+  }
+
+  if (!fundamentals || fundamentals.error) {
+    return <EmptyState title="لا توجد Fundamentals جاهزة" description={fundamentals?.error || "المصدر الحالي لم يرجع بيانات أساسية لهذا الرمز."} />;
+  }
+
+  return (
+    <div className="analysis-mini-grid">
+      <MetricCard label="الشركة" value={fundamentals?.entity_name || fundamentals?.ticker || "—"} detail={fundamentals?.source || "SEC EDGAR"} />
+      <MetricCard label="الإيرادات TTM" value={money(fundamentals?.revenue_ttm)} detail="Revenue" tone="accent" />
+      <MetricCard label="صافي الدخل TTM" value={money(fundamentals?.net_income_ttm)} detail="Net income" tone={Number(fundamentals?.net_income_ttm || 0) >= 0 ? "positive" : "negative"} />
+      <MetricCard label="EPS TTM" value={number(fundamentals?.eps_ttm, 2)} detail="EPS" />
+      <MetricCard label="Debt / Equity" value={number(fundamentals?.debt_to_equity, 2)} detail="Leverage" />
+      <MetricCard label="تاريخ البيانات" value={fundamentals?.data_date || "—"} detail="Latest filing" />
+    </div>
+  );
+}
+
+function MacroBoard({ macro, loading }) {
+  if (loading) {
+    return <LoadingSkeleton lines={4} />;
+  }
+
+  if (!macro) {
+    return <EmptyState title="لا توجد قراءة ماكرو" description="تعذر تحميل طبقة الماكرو الحالية." />;
+  }
+
+  return (
+    <div className="analysis-macro-board">
+      <div className="analysis-macro-hero">
+        <div>
+          <span className="analysis-hero-kicker">Macro Regime</span>
+          <h3>{macro?.macro_regime || "neutral"}</h3>
+        </div>
+        <StatusBadge label={`${macro?.macro_score ?? 0}/100`} tone={Number(macro?.macro_score || 0) >= 60 ? "positive" : Number(macro?.macro_score || 0) <= 40 ? "negative" : "warning"} />
+      </div>
+      <div className="analysis-macro-grid">
+        <MetricCard label="VIX" value={number(macro?.vix)} detail={macro?.vix_regime || "—"} />
+        <MetricCard label="10Y-2Y" value={number(macro?.yield_spread_10y2y, 2)} detail={macro?.yield_curve || "—"} />
+        <MetricCard label="Fed Funds" value={number(macro?.fed_funds_rate, 2)} detail="Rate" />
+        <MetricCard label="HY Spread" value={number(macro?.hy_spread, 2)} detail={macro?.credit_conditions || "—"} />
+      </div>
+    </div>
+  );
+}
+
+export default function AIMarketPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { workspace, activeWatchlist, favoriteSymbols } = useWorkspace();
+  const [symbol, setSymbol] = useState("AAPL");
+  const [chartInterval, setChartInterval] = useState("D");
+  const [chartStyle, setChartStyle] = useState("1");
+  const [surfaceLoading, setSurfaceLoading] = useState(true);
+  const [surfaceError, setSurfaceError] = useState("");
+  const [signalSurface, setSignalSurface] = useState(null);
+  const [quotePayload, setQuotePayload] = useState(null);
+  const [fundamentals, setFundamentals] = useState(null);
+  const [macro, setMacro] = useState(null);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const { decision, loading: decisionLoading, error: decisionError } = useDecisionSurface({
+    symbol,
+    startDate: "2024-01-01",
+    endDate: todayIso,
+    enabled: Boolean(symbol),
+  });
+
+  useEffect(() => {
+    const querySymbol = String(searchParams.get("symbol") || "").trim().toUpperCase();
+    if (querySymbol) {
+      setSymbol(querySymbol);
+      return;
+    }
+    const workspaceSymbol = String(workspace?.active_symbol || activeWatchlist?.symbols?.[0] || "AAPL").trim().toUpperCase();
+    setSymbol(workspaceSymbol || "AAPL");
+  }, [searchParams, workspace?.active_symbol, activeWatchlist?.symbols]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadSurface() {
+      if (!symbol) return;
+      setSurfaceLoading(true);
+      setSurfaceError("");
+      try {
+        const [signalData, quoteData, fundamentalsData, macroData] = await Promise.all([
+          fetchSymbolSignal(symbol),
+          fetchQuoteSnapshot(symbol),
+          fetchFundamentals(symbol).catch((error) => ({ error: error.message || "Fundamentals unavailable" })),
+          fetchMacroCalendar().catch(() => null),
+        ]);
+        if (!active) return;
+        setSignalSurface(signalData);
+        setQuotePayload(quoteData);
+        setFundamentals(fundamentalsData);
+        setMacro(macroData);
+      } catch (error) {
+        if (!active) return;
+        setSurfaceError(error.message || "تعذر تحميل طبقة التحليل الحالية.");
+      } finally {
+        if (active) {
+          setSurfaceLoading(false);
+        }
+      }
+    }
+
+    loadSurface().catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [symbol]);
+
+  const quickSymbols = useMemo(() => {
+    const seen = new Set();
+    const values = [
+      symbol,
+      ...(favoriteSymbols || []),
+      ...((activeWatchlist?.symbols || []).slice(0, 6)),
+      ...DEFAULT_SYMBOLS,
+    ];
+    return values.filter((item) => {
+      const normalized = String(item || "").trim().toUpperCase();
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    }).slice(0, 8);
+  }, [symbol, favoriteSymbols, activeWatchlist?.symbols]);
+
+  function updateSymbol(next) {
+    const normalized = String(next?.symbol || next || "").trim().toUpperCase();
+    if (!normalized) return;
+    setSymbol(normalized);
+    const params = new URLSearchParams(searchParams);
+    params.set("symbol", normalized);
+    setSearchParams(params);
+  }
+
+  return (
+    <PageFrame
+      title="محطة التحليل"
+      description="سطح قرار احترافي يجمع الإشارة canonical، الشرح، الشارت، والبيانات الأساسية في صفحة واحدة."
+      eyebrow="AI Research"
+      headerActions={<StatusBadge label={signalSurface?.signal || "HOLD"} tone={signalTone(signalSurface?.signal)} />}
+    >
+      <ErrorBanner message={surfaceError || decisionError} />
+
+      <section className="analysis-toolbar-card">
+        <div className="analysis-toolbar-main">
+          <SymbolPicker
+            label="اختر السهم"
+            value={symbol}
+            onChange={setSymbol}
+            onSelect={updateSymbol}
+            placeholder="ابحث بالرمز أو اسم الشركة"
+            helperText="اختيار السهم هنا يحدّث الإشارة والشارت ولوحة القرار معًا."
+          />
+          <div className="analysis-quick-symbols">
+            {quickSymbols.map((item) => (
+              <button
+                key={item}
+                className={`workspace-symbol-chip${item === symbol ? " active" : ""}`}
+                type="button"
+                onClick={() => updateSymbol(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <SignalHero symbol={symbol} signal={signalSurface} quote={quotePayload?.quote} loading={surfaceLoading} />
+
+      <div className="command-grid">
+        <SectionCard
+          className="col-span-7"
+          title="الشارت التنفيذي"
+          description="شارت TradingView مع التحكم في الإطار الزمني ونمط العرض."
+          action={
+            <div className="analysis-chip-row">
+              {INTERVALS.map((item) => (
+                <button
+                  key={item}
+                  className={`analysis-chip-btn${chartInterval === item ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setChartInterval(item)}
+                >
+                  {item}
+                </button>
               ))}
             </div>
-          )}
-        </>
-      ) : (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>غير متاح</div>
-      )}
-    </div>
-  );
-}
-
-function FundamentalsCard({ fund, loading }) {
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}><span>📊</span> الأساسيات المالية</div>
-      {loading ? (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>جاري التحميل...</div>
-      ) : fund && !fund.error ? (
-        <div>
-          {[
-            ["المبيعات (سنوي)", fmtBig(fund.revenue_ttm)],
-            ["صافي الربح",      fmtBig(fund.net_income_ttm)],
-            ["EPS",             fund.eps_ttm != null ? `$${fmt(fund.eps_ttm)}` : "—"],
-            ["الديون/حقوق",     fund.debt_to_equity != null ? fmt(fund.debt_to_equity) : "—"],
-          ].map(([k,v]) => (
-            <div key={k} style={S.metaRow}>
-              <span style={S.metaLabel}>{k}</span>
-              <span style={S.metaValue}>{v}</span>
+          }
+        >
+          <div className="analysis-chart-card">
+            <div className="analysis-chart-toolbar">
+              <div className="analysis-chip-row">
+                {CHART_STYLES.map((item) => (
+                  <button
+                    key={item.key}
+                    className={`analysis-chip-btn analysis-chip-btn--subtle${chartStyle === item.key ? " active" : ""}`}
+                    type="button"
+                    onClick={() => setChartStyle(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <StatusBadge label={quotePayload?.metadata?.security_name || quotePayload?.quote?.security_name || symbol} tone="subtle" dot={false} />
             </div>
-          ))}
-          {fund.ticker && (
-            <div style={{ marginTop: "8px", fontSize: "11px", color: "#334155" }}>
-              المصدر: SEC EDGAR
-            </div>
-          )}
-        </div>
-      ) : (
-        <div style={{ color: "#64748b", fontSize: "13px" }}>
-          {fund?.error === "ETF_OR_NO_DATA" ? "ETF — لا توجد بيانات EDGAR" : "لا توجد بيانات"}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function KellyCard({ symbol, quote }) {
-  const [winRate, setWinRate] = useState(55);
-  const [avgWin,  setAvgWin]  = useState(2.5);
-  const [avgLoss, setAvgLoss] = useState(1.0);
-  const [capital, setCapital] = useState(10000);
-  const [result,  setResult]  = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const calculate = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await calculateKelly(winRate / 100, avgWin, avgLoss, capital);
-      setResult(res);
-    } catch { setResult(null); }
-    finally { setLoading(false); }
-  }, [winRate, avgWin, avgLoss, capital, quote]);
-
-  const inputStyle = {
-    background: "#1e293b", border: "1px solid #334155", borderRadius: "6px",
-    color: "#f1f5f9", padding: "4px 8px", fontSize: "12px", width: "70px",
-    textAlign: "center", outline: "none",
-  };
-  const labelStyle = { fontSize: "11px", color: "#64748b" };
-
-  return (
-    <div style={S.card}>
-      <div style={S.cardTitle}><span>📐</span> حجم الصفقة (Kelly)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "10px" }}>
-        {[
-          ["نسبة الفوز %", winRate, setWinRate],
-          ["متوسط الربح %", avgWin, setAvgWin],
-          ["متوسط الخسارة %", avgLoss, setAvgLoss],
-          ["رأس المال $", capital, setCapital],
-        ].map(([lbl, val, setter]) => (
-          <div key={lbl} style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            <span style={labelStyle}>{lbl}</span>
-            <input
-              type="number"
-              value={val}
-              onChange={e => setter(Number(e.target.value))}
-              style={inputStyle}
-            />
+            <TradingViewWidget symbol={symbol} interval={chartInterval} style={chartStyle} height={560} />
           </div>
-        ))}
-      </div>
-      <button
-        onClick={calculate}
-        disabled={loading}
-        style={{
-          width: "100%", padding: "8px", borderRadius: "6px",
-          background: loading ? "#334155" : "#1d4ed8",
-          color: "#fff", border: "none", cursor: loading ? "not-allowed" : "pointer",
-          fontSize: "13px", fontWeight: "600",
-        }}
-      >
-        {loading ? "جاري الحساب..." : "احسب الحجم"}
-      </button>
-      {result && (
-        <div style={{ marginTop: "10px" }}>
-          {[
-            ["Kelly %",   `${fmt(result.kelly_pct ?? result.half_kelly_pct)}%`],
-            ["عدد الأسهم", result.shares ?? "—"],
-            ["المبلغ المقترح", result.position_size_usd ? `$${fmt(result.position_size_usd)}` : "—"],
-          ].map(([k,v]) => (
-            <div key={k} style={S.metaRow}>
-              <span style={S.metaLabel}>{k}</span>
-              <span style={{ ...S.metaValue, color: "#22c55e" }}>{v}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+        </SectionCard>
 
-// ─── Main Page ───────────────────────────────────────────────────────────────
-export default function AIMarketPage() {
-  const [symbol,   setSymbol]   = useState("AAPL");
-  const [search,   setSearch]   = useState("");
-  const [interval, setInterval] = useState("D");
-  const [chartStyle, setChartStyle] = useState("1");
+        <DecisionPanel
+          className="col-span-5"
+          decision={decision}
+          loading={decisionLoading}
+          error={decisionError}
+          title="القرار الحالي"
+          description="شرح الموقف الحالي، الأدلة، والعوامل الداعمة أو الضاغطة."
+        />
 
-  const [quote,    setQuote]    = useState(null);
-  const [signal,   setSignal]   = useState(null);
-  const [macro,    setMacro]    = useState(null);
-  const [fund,     setFund]     = useState(null);
+        <SectionCard className="col-span-4" title="ملخص السوق للسهم" description="لقطة السعر الحالية كما وصلت من طبقة السوق.">
+          <QuoteBoard quotePayload={quotePayload} loading={surfaceLoading} />
+        </SectionCard>
 
-  const [quoteLoading,  setQuoteLoading]  = useState(false);
-  const [signalLoading, setSignalLoading] = useState(false);
-  const [macroLoading,  setMacroLoading]  = useState(false);
-  const [fundLoading,   setFundLoading]   = useState(false);
+        <SectionCard className="col-span-4" title="البيانات الأساسية" description="ملخص fundamentals الحالي عبر SEC EDGAR عندما يكون متاحًا.">
+          <FundamentalsBoard fundamentals={fundamentals} loading={surfaceLoading} />
+        </SectionCard>
 
-  const loadQuoteAndSignal = useCallback(async (sym) => {
-    setQuoteLoading(true);
-    setSignalLoading(true);
-    try {
-      const [snap, sig] = await Promise.all([
-        fetchQuoteSnapshot(sym).catch(() => null),
-        fetchSymbolSignal(sym).catch(() => null),
-      ]);
-      setQuote(snap?.quote ?? snap);
-      setSignal(sig);
-    } finally {
-      setQuoteLoading(false);
-      setSignalLoading(false);
-    }
-  }, []);
-
-  const loadMacro = useCallback(async () => {
-    setMacroLoading(true);
-    try {
-      const m = await fetchMacroCalendar().catch(() => null);
-      setMacro(m);
-    } finally { setMacroLoading(false); }
-  }, []);
-
-  const loadFund = useCallback(async (sym) => {
-    setFundLoading(true);
-    try {
-      const f = await fetchFundamentals(sym).catch(() => null);
-      setFund(f);
-    } finally { setFundLoading(false); }
-  }, []);
-
-  const selectSymbol = useCallback((sym) => {
-    setSymbol(sym);
-    setSearch("");
-    loadQuoteAndSignal(sym);
-    loadFund(sym);
-  }, [loadQuoteAndSignal, loadFund]);
-
-  // Initial load
-  useEffect(() => {
-    loadQuoteAndSignal(symbol);
-    loadMacro();
-    loadFund(symbol);
-  }, []);
-
-  // Auto-refresh quote every 60s
-  useEffect(() => {
-    const id = setInterval(() => loadQuoteAndSignal(symbol), 60_000);
-    return () => clearInterval(id);
-  }, [symbol, loadQuoteAndSignal]);
-
-  const handleSearch = (e) => {
-    if (e.key === "Enter" && search.trim()) {
-      selectSymbol(search.trim().toUpperCase());
-    }
-  };
-
-  const tvSymbol = normalizeSymbol(symbol);
-
-  return (
-    <div style={S.page}>
-      {/* Header */}
-      <div style={S.header}>
-        <div style={S.logo}>
-          <span>📡</span>
-          <span>محطة السوق</span>
-        </div>
-
-        {/* Search */}
-        <div style={S.searchBox}>
-          <span style={{ color: "#64748b", fontSize: "14px" }}>🔍</span>
-          <input
-            style={S.searchInput}
-            placeholder="ابحث عن رمز... (AAPL، TSLA...)"
-            value={search}
-            onChange={e => setSearch(e.target.value.toUpperCase())}
-            onKeyDown={handleSearch}
-          />
-        </div>
-
-        {/* Quick symbols */}
-        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-          {QUICK_SYMBOLS.map(({ sym, label, icon }) => (
-            <button
-              key={sym}
-              style={S.quickBtn(symbol === sym)}
-              onClick={() => selectSymbol(sym)}
-            >
-              {icon} {sym}
-            </button>
-          ))}
-        </div>
+        <SectionCard className="col-span-4" title="سياق الماكرو" description="قراءة مختصرة للنظام الاقتصادي الحالي وتأثيره على المخاطر.">
+          <MacroBoard macro={macro} loading={surfaceLoading} />
+        </SectionCard>
       </div>
 
-      {/* Body */}
-      <div style={S.body}>
-        {/* Chart Section */}
-        <div style={S.chartSection}>
-          {/* Chart Toolbar */}
-          <div style={S.chartToolbar}>
-            <span style={{ fontSize: "13px", fontWeight: "700", color: "#94a3b8" }}>
-              {tvSymbol}
-            </span>
-            <span style={{ color: "#334155" }}>|</span>
-
-            {/* Intervals */}
-            {INTERVALS.map(({ key, label }) => (
-              <button
-                key={key}
-                style={S.intervalBtn(interval === key)}
-                onClick={() => setInterval(key)}
-              >
-                {label}
-              </button>
-            ))}
-            <span style={{ color: "#334155" }}>|</span>
-
-            {/* Chart styles */}
-            {CHART_STYLES.map(({ key, label }) => (
-              <button
-                key={key}
-                style={S.styleBtn(chartStyle === key)}
-                onClick={() => setChartStyle(key)}
-              >
-                {label}
-              </button>
-            ))}
-
-            <span style={{ marginRight: "auto", fontSize: "11px", color: "#334155" }}>
-              Powered by TradingView
-            </span>
-          </div>
-
-          {/* TradingView Chart */}
-          <div style={S.chartWrapper}>
-            <TradingViewWidget
-              symbol={tvSymbol}
-              interval={interval}
-              style={chartStyle}
-              height={window.innerHeight - 200}
-              showToolbar={true}
-              showVolume={true}
-              locale="ar_AE"
-            />
-          </div>
-        </div>
-
-        {/* Sidebar */}
-        <div style={S.sidebar}>
-          <QuoteCard
-            symbol={symbol}
-            quote={quote}
-            signal={signal}
-            loading={quoteLoading}
-          />
-          <SignalCard
-            signal={signal}
-            loading={signalLoading}
-          />
-          <MacroCard
-            macro={macro}
-            loading={macroLoading}
-            onRefresh={loadMacro}
-          />
-          <FundamentalsCard
-            fund={fund}
-            loading={fundLoading}
-          />
-          <KellyCard
-            symbol={symbol}
-            quote={quote}
-          />
-        </div>
-      </div>
-    </div>
+      {!signalSurface && !surfaceLoading ? (
+        <EmptyState
+          title="لا توجد إشارة جاهزة"
+          description="اختر سهمًا آخر أو تأكد من أن endpoint الإشارة متاح من الباك إند الحالي."
+        />
+      ) : null}
+    </PageFrame>
   );
 }

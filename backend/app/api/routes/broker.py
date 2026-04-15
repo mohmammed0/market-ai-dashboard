@@ -7,12 +7,13 @@ from backend.app.application.broker.service import (
     get_broker_status,
     get_broker_summary,
 )
+from backend.app.domain.broker.contracts import BrokerStatus, BrokerSummaryResponse
 
 
 router = APIRouter(prefix="/broker", tags=["broker"])
 
 
-@router.get("/status")
+@router.get("/status", response_model=BrokerStatus)
 def broker_status():
     try:
         return get_broker_status()
@@ -28,7 +29,7 @@ def broker_status():
         }
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=BrokerSummaryResponse)
 def broker_summary(refresh: bool = False):
     return get_broker_summary(refresh=refresh)
 

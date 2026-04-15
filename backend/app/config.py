@@ -60,6 +60,7 @@ FORWARDED_ALLOW_IPS = os.getenv("MARKET_AI_FORWARDED_ALLOW_IPS", "*").strip() or
 # --- Authentication ---
 AUTH_ENABLED = os.getenv("MARKET_AI_AUTH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 AUTH_SECRET_KEY = os.getenv("MARKET_AI_AUTH_SECRET_KEY", "change-me-in-production-use-openssl-rand-hex-32").strip()
+AUTH_SECRET_KEY_IS_DEFAULT = AUTH_SECRET_KEY == "change-me-in-production-use-openssl-rand-hex-32"
 AUTH_ALGORITHM = "HS256"
 AUTH_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("MARKET_AI_AUTH_TOKEN_EXPIRE_MINUTES", "1440"))
 AUTH_DEFAULT_USERNAME = os.getenv("MARKET_AI_AUTH_DEFAULT_USERNAME", "admin").strip()
@@ -76,7 +77,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b-instruct-v0.3-q4_K_M").stri
 OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
 OLLAMA_CONTEXT_LENGTH = int(os.getenv("OLLAMA_CONTEXT_LENGTH", "4096"))
-AI_PROVIDER = os.getenv("MARKET_AI_PROVIDER", "ollama").strip().lower()  # "ollama" | "openai" | "auto"
+AI_PROVIDER = os.getenv("MARKET_AI_PROVIDER", "ollama").strip().lower()  # resolved locally; non-ollama values degrade safely
 BROKER_PROVIDER = os.getenv("MARKET_AI_BROKER_PROVIDER", "none").strip().lower()
 BROKER_ORDER_SUBMISSION_ENABLED = os.getenv("MARKET_AI_BROKER_ORDER_SUBMISSION_ENABLED", "0").strip().lower() not in {"0", "false", "no"}
 BROKER_LIVE_EXECUTION_ENABLED = os.getenv("MARKET_AI_BROKER_LIVE_EXECUTION_ENABLED", "0").strip().lower() not in {"0", "false", "no"}

@@ -14,6 +14,14 @@ export async function fetchDashboardSummary() {
   return getJson("/api/dashboard/summary");
 }
 
+export async function fetchDashboardLite() {
+  return getJson("/api/dashboard/lite");
+}
+
+export async function fetchDashboardWidget(widget) {
+  return getJson(`/api/dashboard/widgets/${encodeURIComponent(widget)}`);
+}
+
 export async function fetchDashboardKpis() {
   return getJson("/api/dashboard/kpis");
 }

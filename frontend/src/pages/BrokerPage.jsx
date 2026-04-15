@@ -103,6 +103,10 @@ export default function BrokerPage() {
                 يبقى التداول التجريبي داخل المحاكي هو مسار التنفيذ الافتراضي. أما التداول التجريبي عبر الوسيط وأي تنفيذ حي مستقبلي
                 فهما معزولان خلف إعدادات صريحة.
               </span>
+              <span>
+                تم ضبط مسار التنفيذ النقدي فقط بحيث يعتمد على <strong>Cash</strong> والأسهم المملوكة فعليًا، وليس على
+                <strong> Buying Power</strong> أو أي فتح مراكز شورت.
+              </span>
             </div>
             <div className="form-actions">
               <button className="primary-button" type="button" onClick={handleRefresh} disabled={refreshing}>
@@ -122,7 +126,7 @@ export default function BrokerPage() {
             <ResultCard label="Account Status" value={summary.account.status || "-"} />
             <ResultCard label="Cash" value={summary.account.cash ?? 0} />
             <ResultCard label="Equity" value={summary.account.equity ?? 0} />
-            <ResultCard label="Buying Power" value={summary.account.buying_power ?? 0} />
+            <ResultCard label="Buying Power (informational only)" value={summary.account.buying_power ?? 0} />
             <ResultCard label="Portfolio Value" value={summary.account.portfolio_value ?? 0} />
             <ResultCard label="Pattern Day Trader" value={summary.account.pattern_day_trader ? "Yes" : "No"} />
             <ResultCard label="Trading Blocked" value={summary.account.trading_blocked ? "Yes" : "No"} tone={summary.account.trading_blocked ? "warning" : "default"} />

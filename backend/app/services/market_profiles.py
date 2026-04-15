@@ -81,12 +81,11 @@ def _fallback_profile(symbol: str, market_cap=None) -> dict:
 
 
 def load_symbol_profiles(symbols: list[str], ttl_hours: int = 72) -> dict:
-    normalized_symbols = [_normalize_symbol(symbol) for symbol in symbols if str(symbol or "").strip()]
-    snapshots = {
-        item["symbol"]: item
-        for item in fetch_quote_snapshots(normalized_symbols, include_profile=True).get("items", [])
-    }
     profiles = {}
+    normalized_symbols = list(dict.fromkeys(
+        _normalize_symbol(symbol) for symbol in symbols if str(symbol or "").strip()
+    ))
+    missing_symbols = []
 
     for symbol in normalized_symbols:
         cached = _read_cached_profile(symbol, ttl_hours=ttl_hours)
@@ -94,10 +93,23 @@ def load_symbol_profiles(symbols: list[str], ttl_hours: int = 72) -> dict:
             cached["provider_status"] = cached.get("provider_status") or "cache"
             profiles[symbol] = cached
             continue
+        missing_symbols.append(symbol)
 
+    if not missing_symbols:
+        return profiles
+
+    snapshots = {
+        item["symbol"]: item
+        for item in fetch_quote_snapshots(missing_symbols, include_profile=True).get("items", [])
+    }
+
+    for symbol in missing_symbols:
         market_cap = (snapshots.get(symbol) or {}).get("market_cap")
+        fallback = _fallback_profile(symbol, market_cap=market_cap)
+        fallback["updated_at"] = _utc_now().isoformat()
         if yf is None:
-            profiles[symbol] = _fallback_profile(symbol, market_cap=market_cap)
+            _write_cached_profile(symbol, fallback)
+            profiles[symbol] = fallback
             continue
 
         try:
@@ -116,6 +128,7 @@ def load_symbol_profiles(symbols: list[str], ttl_hours: int = 72) -> dict:
             _write_cached_profile(symbol, payload)
             profiles[symbol] = payload
         except Exception:
-            profiles[symbol] = _fallback_profile(symbol, market_cap=market_cap)
+            _write_cached_profile(symbol, fallback)
+            profiles[symbol] = fallback
 
     return profiles

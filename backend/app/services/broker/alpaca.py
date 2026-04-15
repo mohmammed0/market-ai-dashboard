@@ -189,11 +189,12 @@ class AlpacaBrokerProvider(BrokerProvider):
             config = get_alpaca_runtime_config()
             return None, self._base_alpaca_status(config, detail=f"Failed to initialize Alpaca client: {exc}")
 
-    def _cached(self, key: str, factory, refresh: bool = False):
+    def _cached(self, key: str, factory, refresh: bool = False, ttl_seconds: int | None = None):
         cache = get_cache()
+        ttl = ALPACA_ACCOUNT_REFRESH_SECONDS if ttl_seconds is None else ttl_seconds
         if refresh:
-            return cache.set(key, factory(), ttl_seconds=ALPACA_ACCOUNT_REFRESH_SECONDS)
-        return cache.get_or_set(key, factory, ttl_seconds=ALPACA_ACCOUNT_REFRESH_SECONDS)
+            return cache.set(key, factory(), ttl_seconds=ttl)
+        return cache.get_or_set(key, factory, ttl_seconds=ttl)
 
     def get_status(self) -> dict:
         client, status = self._client()
@@ -289,6 +290,7 @@ class AlpacaBrokerProvider(BrokerProvider):
 
     def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
                      time_in_force: str = "day", limit_price: float | None = None,
+                     estimated_price: float | None = None,
                      stop_price: float | None = None, take_profit_price: float | None = None,
                      stop_loss_price: float | None = None) -> dict:
         """Submit an order to Alpaca paper/live account."""
@@ -304,6 +306,42 @@ class AlpacaBrokerProvider(BrokerProvider):
             return {"ok": False, "error": "alpaca-py SDK order classes not available.", "order": None}
 
         try:
+            account = client.get_account()
+            estimated_price = _safe_float(estimated_price, _safe_float(limit_price, 0.0))
+            if estimated_price <= 0:
+                estimated_price = 0.0
+
+            normalized_side = str(side or "").strip().upper()
+            requested_qty = max(_safe_float(qty, 0.0), 0.0)
+            if normalized_side == "BUY":
+                available_cash = _safe_float(getattr(account, "cash", None), 0.0)
+                estimated_notional = requested_qty * estimated_price if estimated_price > 0 else 0.0
+                if estimated_notional > 0 and estimated_notional > available_cash:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"Cash-only guard blocked BUY for {symbol.upper()}: "
+                            f"requires about ${estimated_notional:.2f}, cash available ${available_cash:.2f}."
+                        ),
+                        "order": None,
+                    }
+            elif normalized_side == "SELL":
+                positions = client.get_all_positions()
+                held_qty = 0.0
+                for position in positions or []:
+                    if (_coerce_text(getattr(position, "symbol", None)) or "").upper() == symbol.upper():
+                        held_qty = _safe_float(getattr(position, "qty", None), 0.0)
+                        break
+                if requested_qty - held_qty > 1e-9:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"Cash-only guard blocked SELL for {symbol.upper()}: "
+                            f"held quantity {held_qty:.4f}, requested {requested_qty:.4f}. Short selling is disabled."
+                        ),
+                        "order": None,
+                    }
+
             order_side = OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL
             tif = TimeInForce.DAY if time_in_force.lower() == "day" else TimeInForce.GTC
 
@@ -341,6 +379,7 @@ class AlpacaBrokerProvider(BrokerProvider):
             cache = get_cache()
             cache.delete("broker:alpaca:orders")
             cache.delete("broker:alpaca:positions")
+            cache.delete("broker:alpaca:summary")
 
             return {"ok": True, "error": None, "order": serialized, "mode": self._mode(config)}
 
@@ -357,6 +396,7 @@ class AlpacaBrokerProvider(BrokerProvider):
             client.cancel_order_by_id(order_id)
             cache = get_cache()
             cache.delete("broker:alpaca:orders")
+            cache.delete("broker:alpaca:summary")
             log_event(logger, logging.INFO, "broker.alpaca.order_cancelled", order_id=order_id)
             return {"ok": True, "error": None}
         except Exception as exc:
@@ -364,26 +404,11 @@ class AlpacaBrokerProvider(BrokerProvider):
             return {"ok": False, "error": f"Cancel failed: {self._summarize_exception(exc)}"}
 
     def get_summary(self, refresh: bool = False) -> dict:
-        account_payload = self.get_account(refresh=refresh)
-        if not account_payload.get("connected", False):
-            status = {
-                key: account_payload.get(key)
-                for key in [
-                    "provider",
-                    "enabled",
-                    "configured",
-                    "sdk_installed",
-                    "connected",
-                    "mode",
-                    "paper",
-                    "live_execution_enabled",
-                    "order_submission_enabled",
-                    "detail",
-                ]
-            }
+        client, status = self._client()
+        if client is None:
             return {
                 **status,
-                "account": account_payload.get("account"),
+                "account": None,
                 "positions": [],
                 "orders": [],
                 "totals": {
@@ -393,34 +418,66 @@ class AlpacaBrokerProvider(BrokerProvider):
                     "unrealized_pnl": 0.0,
                 },
             }
-        positions_payload = self.get_positions(refresh=refresh)
-        orders_payload = self.get_orders(refresh=refresh)
-        positions = positions_payload.get("items", [])
-        orders = orders_payload.get("items", [])
-        status = {
-            key: account_payload.get(key)
-            for key in [
-                "provider",
-                "enabled",
-                "configured",
-                "sdk_installed",
-                "connected",
-                "mode",
-                "paper",
-                "live_execution_enabled",
-                "order_submission_enabled",
-                "detail",
-            ]
-        }
-        return {
-            **status,
-            "account": account_payload.get("account"),
-            "positions": positions,
-            "orders": orders,
-            "totals": {
-                "positions": len(positions),
-                "open_orders": len(orders),
-                "market_value": round(sum(_safe_float(item.get("market_value")) for item in positions), 2),
-                "unrealized_pnl": round(sum(_safe_float(item.get("unrealized_pnl")) for item in positions), 2),
-            },
-        }
+        config = get_alpaca_runtime_config()
+        summary_cache_key = "broker:alpaca:summary"
+        summary_ttl_seconds = max(int(ALPACA_ACCOUNT_REFRESH_SECONDS), 60)
+        cache = get_cache()
+        if not refresh:
+            cached_summary = cache.get(summary_cache_key)
+            if cached_summary is not None:
+                return cached_summary
+        try:
+            def load_orders():
+                if GetOrdersRequest is not None and QueryOrderStatus is not None:
+                    request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50, nested=True)
+                    return client.get_orders(filter=request)
+                return client.get_orders()
+
+            account = self._cached("broker:alpaca:account", client.get_account, refresh=refresh)
+            position_rows = self._cached("broker:alpaca:positions", client.get_all_positions, refresh=refresh)
+            order_rows = self._cached("broker:alpaca:orders", load_orders, refresh=refresh)
+            account_payload = _serialize_account(account)
+            positions = [_serialize_position(row) for row in position_rows or []]
+            orders = [_serialize_order(row) for row in order_rows or []]
+            detail = f"Connected to Alpaca {self._mode(config)} account."
+            base_status = self._base_alpaca_status(
+                config,
+                connected=True,
+                detail=detail,
+                account_status=account_payload.get("status"),
+                account_id=account_payload.get("account_id"),
+                cash=account_payload.get("cash"),
+                equity=account_payload.get("equity"),
+            )
+            self._log_connectivity_change(True, detail)
+            payload = {
+                **base_status,
+                "account": account_payload,
+                "positions": positions,
+                "orders": orders,
+                "totals": {
+                    "positions": len(positions),
+                    "open_orders": len(orders),
+                    "market_value": round(sum(_safe_float(item.get("market_value")) for item in positions), 2),
+                    "unrealized_pnl": round(sum(_safe_float(item.get("unrealized_pnl")) for item in positions), 2),
+                },
+            }
+            cache.set(summary_cache_key, payload, ttl_seconds=summary_ttl_seconds)
+            return payload
+        except Exception as exc:  # pragma: no cover - external service
+            self._log_request_failure("summary", exc)
+            detail = f"Alpaca summary request failed: {self._summarize_exception(exc)}"
+            payload = self._base_alpaca_status(config, detail=detail)
+            self._log_connectivity_change(False, detail)
+            return {
+                **payload,
+                "account": None,
+                "positions": [],
+                "orders": [],
+                "totals": {
+                    "positions": 0,
+                    "open_orders": 0,
+                    "market_value": 0.0,
+                    "unrealized_pnl": 0.0,
+                },
+            }

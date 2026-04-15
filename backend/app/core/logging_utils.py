@@ -6,6 +6,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import re
 from typing import Any
 
 from backend.app.config import LOG_EVENTS_ENABLED, LOG_FILE_BACKUP_COUNT, LOG_FILE_MAX_BYTES, OPS_LOGS_DIR
@@ -16,6 +17,43 @@ _EVENTS_LOGGER_NAME = "market_ai.events"
 _APP_LOG_PATH = OPS_LOGS_DIR / "app.log"
 _EVENTS_LOG_PATH = OPS_LOGS_DIR / "events.jsonl"
 _CONFIGURED = False
+
+_REDACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"(https://api\.telegram\.org/bot)([^/\s\"']+)(/)", re.IGNORECASE),
+        r"\1***REDACTED***\3",
+    ),
+    (
+        re.compile(r"((?:Authorization|authorization)\s*[:=]\s*Bearer\s+)([A-Za-z0-9._\-]+)"),
+        r"\1***REDACTED***",
+    ),
+    (
+        re.compile(
+            r"((?:bot_token|api_key|secret_key|password|access_token|worker_token|auth_secret_key)[\"']?\s*[:=]\s*[\"']?)([^\"',\s}]+)",
+            re.IGNORECASE,
+        ),
+        r"\1***REDACTED***",
+    ),
+    (
+        re.compile(
+            r"((?:TELEGRAM_BOT_TOKEN|ALPACA_API_KEY|ALPACA_SECRET_KEY|MARKET_AI_AUTH_SECRET_KEY|MARKET_AI_WORKER_TOKEN)=)([^\s]+)",
+            re.IGNORECASE,
+        ),
+        r"\1***REDACTED***",
+    ),
+)
+
+
+def redact_secrets(text: str) -> str:
+    sanitized = str(text or "")
+    for pattern, replacement in _REDACTION_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
+
+
+class RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(super().format(record))
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -28,7 +66,7 @@ def configure_logging(level: str = "INFO") -> None:
         return
 
     ensure_runtime_directories()
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    formatter = RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(level_value)
@@ -60,7 +98,7 @@ def configure_logging(level: str = "INFO") -> None:
             encoding="utf-8",
         )
         events_handler.setLevel(level_value)
-        events_handler.setFormatter(logging.Formatter("%(message)s"))
+        events_handler.setFormatter(RedactingFormatter("%(message)s"))
         events_logger.addHandler(events_handler)
 
     _CONFIGURED = True
@@ -79,7 +117,7 @@ def log_event(logger: logging.Logger, level: int, event: str, **context: Any) ->
         **context,
     }
     try:
-        message = json.dumps(payload, default=str, sort_keys=True)
+        message = redact_secrets(json.dumps(payload, default=str, sort_keys=True))
     except Exception:
         message = f"{event} | context_encode_failed"
     logger.log(level, message)

@@ -12,7 +12,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy import select
 
 from backend.app.core.logging_utils import get_logger, log_event
-from backend.app.config import ALPACA_ACCOUNT_REFRESH_SECONDS, DATABASE_URL, OPENAI_TIMEOUT_SECONDS
+from backend.app.config import ALPACA_ACCOUNT_REFRESH_SECONDS, AUTO_TRADING_CYCLE_MINUTES, DATABASE_URL
 from backend.app.models.runtime_settings import RuntimeSetting
 from backend.app.services.cache import get_cache
 from backend.app.services.storage import session_scope
@@ -42,9 +42,6 @@ class SettingSpec:
 
 
 SETTING_SPECS: dict[str, SettingSpec] = {
-    "openai.enabled": SettingSpec("openai.enabled", "OPENAI_ENABLED", False, kind="bool"),
-    "openai.api_key": SettingSpec("openai.api_key", "OPENAI_API_KEY", "", secret=True),
-    "openai.model": SettingSpec("openai.model", "OPENAI_MODEL", "gpt-5.4-mini"),
     "broker.provider": SettingSpec("broker.provider", "MARKET_AI_BROKER_PROVIDER", "none"),
     "broker.order_submission_enabled": SettingSpec(
         "broker.order_submission_enabled",
@@ -68,6 +65,12 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         "MARKET_AI_AUTO_TRADING_ENABLED",
         False,
         kind="bool",
+    ),
+    "auto_trading.cycle_minutes": SettingSpec(
+        "auto_trading.cycle_minutes",
+        "MARKET_AI_AUTO_TRADING_CYCLE_MINUTES",
+        AUTO_TRADING_CYCLE_MINUTES,
+        kind="int",
     ),
 }
 
@@ -148,12 +151,22 @@ def _normalize_alpaca_url_override(value: Any) -> str:
 def _serialize_value(spec: SettingSpec, value: Any) -> str:
     if spec.kind == "bool":
         return "1" if _coerce_bool(value, default=bool(spec.default)) else "0"
+    if spec.kind == "int":
+        try:
+            return str(int(value))
+        except Exception:
+            return str(int(spec.default))
     return _coerce_text(value, default=str(spec.default))
 
 
 def _deserialize_value(spec: SettingSpec, value: str | None) -> Any:
     if spec.kind == "bool":
         return _coerce_bool(value, default=bool(spec.default))
+    if spec.kind == "int":
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return int(spec.default)
     return _coerce_text(value, default=str(spec.default))
 
 
@@ -268,25 +281,6 @@ def _sdk_installed(package: str) -> bool:
         return False
 
 
-def _build_openai_payload(records: dict[str, dict[str, Any]] | None = None, *, include_secrets: bool = False) -> dict:
-    # OpenAI permanently removed — always returns standby/disabled.
-    return {
-        "enabled": False,
-        "enabled_source": "hardcoded",
-        "configured": False,
-        "api_key": None,
-        "api_key_masked": "",
-        "api_key_source": "hardcoded",
-        "model": "none",
-        "model_source": "hardcoded",
-        "sdk_installed": False,
-        "status": "standby",
-        "runtime_enabled": False,
-        "timeout_seconds": OPENAI_TIMEOUT_SECONDS,
-        "detail": "OpenAI integration has been permanently removed. Use local model (Ollama).",
-    }
-
-
 def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, include_secrets: bool = False) -> dict:
     provider, provider_source = _resolve_setting("broker.provider", records)
     order_submission_enabled, order_submission_source = _resolve_setting("broker.order_submission_enabled", records)
@@ -319,6 +313,7 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
         status = "ready"
 
     auto_trading_enabled, auto_trading_source = _resolve_setting("auto_trading.enabled", records)
+    auto_trading_cycle_minutes, auto_trading_cycle_source = _resolve_setting("auto_trading.cycle_minutes", records)
     return {
         "provider": provider_name,
         "provider_source": provider_source,
@@ -328,6 +323,8 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
         "live_execution_source": live_execution_source,
         "auto_trading_enabled": bool(auto_trading_enabled),
         "auto_trading_source": auto_trading_source,
+        "auto_trading_cycle_minutes": int(auto_trading_cycle_minutes),
+        "auto_trading_cycle_source": auto_trading_cycle_source,
         "alpaca": {
             "enabled": bool(alpaca_enabled),
             "enabled_source": alpaca_enabled_source,
@@ -358,23 +355,7 @@ def get_runtime_settings_overview() -> dict:
         "database_path": database.get("path"),
         "credentials_precedence": ["ui_managed", "environment", "default"],
         "key_store_path": str(SETTINGS_KEY_PATH),
-        "openai": _build_openai_payload(records, include_secrets=False),
         "broker": _build_broker_payload(records, include_secrets=False),
-    }
-
-
-def get_openai_runtime_config() -> dict:
-    payload = _build_openai_payload(include_secrets=True)
-    return {
-        "enabled": payload["enabled"],
-        "api_key": payload["api_key"],
-        "model": payload["model"],
-        "configured": payload["configured"],
-        "runtime_enabled": payload["runtime_enabled"],
-        "enabled_source": payload["enabled_source"],
-        "api_key_source": payload["api_key_source"],
-        "model_source": payload["model_source"],
-        "timeout_seconds": payload["timeout_seconds"],
     }
 
 
@@ -447,12 +428,6 @@ def invalidate_runtime_caches() -> None:
         cache.delete_prefix("broker:alpaca:")
 
 
-def save_openai_runtime_settings(*, enabled: bool, model: str, api_key: str | None = None, clear_api_key: bool = False) -> dict:
-    # OpenAI permanently removed — settings cannot be changed.
-    log_event(logger, logging.WARNING, "runtime_settings.openai.saved", enabled=False, reason="permanently_removed")
-    return _build_openai_payload()
-
-
 def save_alpaca_runtime_settings(
     *,
     enabled: bool,
@@ -465,6 +440,7 @@ def save_alpaca_runtime_settings(
     url_override: str | None = None,
     auto_trading_enabled: bool | None = None,
     order_submission_enabled: bool | None = None,
+    auto_trading_cycle_minutes: int | None = None,
 ) -> dict:
     clean_provider = _coerce_text(provider, default="alpaca").lower()
     if clean_provider not in {"alpaca", "none"}:
@@ -486,9 +462,17 @@ def save_alpaca_runtime_settings(
             _upsert_setting(session, "alpaca.url_override", clean_url_override, delete_when_blank=True)
         if auto_trading_enabled is not None:
             _upsert_setting(session, "auto_trading.enabled", auto_trading_enabled)
+        if auto_trading_cycle_minutes is not None:
+            _upsert_setting(session, "auto_trading.cycle_minutes", max(1, min(int(auto_trading_cycle_minutes), 720)))
         if order_submission_enabled is not None:
             _upsert_setting(session, "broker.order_submission_enabled", order_submission_enabled)
     invalidate_runtime_caches()
+    try:
+        from backend.app.services.scheduler_runtime import sync_auto_trading_schedule
+
+        sync_auto_trading_schedule()
+    except Exception:
+        pass
     overview = get_runtime_settings_overview()["broker"]
     alpaca_overview = overview.get("alpaca", {}) if isinstance(overview, dict) else {}
     log_event(
@@ -502,15 +486,9 @@ def save_alpaca_runtime_settings(
         secret_key_updated=bool(secret_key),
         api_key_cleared=bool(clear_api_key),
         secret_key_cleared=bool(clear_secret_key),
+        auto_trading_cycle_minutes=overview.get("auto_trading_cycle_minutes"),
     )
     return overview
-
-
-def test_openai_runtime_settings() -> dict:
-    # OpenAI permanently removed — always returns disabled.
-    result = {"ok": False, "detail": "OpenAI integration has been permanently removed. Use local model (Ollama).", "model": "none"}
-    log_event(logger, logging.WARNING, "runtime_settings.openai.test", ok=False, reason="permanently_removed")
-    return result
 
 
 def test_alpaca_runtime_settings() -> dict:
@@ -566,11 +544,14 @@ def test_alpaca_runtime_settings() -> dict:
 def get_auto_trading_config() -> dict:
     """Get auto-trading configuration from runtime settings."""
     auto_enabled, auto_source = _resolve_setting("auto_trading.enabled")
+    cycle_minutes, cycle_source = _resolve_setting("auto_trading.cycle_minutes")
     order_sub, order_sub_source = _resolve_setting("broker.order_submission_enabled")
     alpaca_config = get_alpaca_runtime_config()
     return {
         "auto_trading_enabled": bool(auto_enabled),
         "auto_trading_source": auto_source,
+        "cycle_minutes": int(cycle_minutes),
+        "cycle_minutes_source": cycle_source,
         "order_submission_enabled": bool(order_sub),
         "alpaca_enabled": alpaca_config.get("enabled", False),
         "alpaca_configured": alpaca_config.get("configured", False),
