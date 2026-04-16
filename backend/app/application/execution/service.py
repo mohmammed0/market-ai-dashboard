@@ -953,6 +953,7 @@ def refresh_signals(
     end_date="2026-04-02",
     auto_execute=True,
     quantity=1.0,
+    quantity_map: dict[str, float] | None = None,
     idempotency_key: str | None = None,
 ):
     normalized_symbols = []
@@ -1015,6 +1016,12 @@ def refresh_signals(
         analysis_concurrency=analysis_concurrency,
     )
 
+    normalized_quantity_map = {
+        str(symbol or "").strip().upper(): max(_safe_float(value, quantity), 0.0)
+        for symbol, value in (quantity_map or {}).items()
+        if str(symbol or "").strip()
+    }
+
     for analyzed in analyzed_symbols:
         normalized_symbol = analyzed["symbol"]
         result = analyzed["result"] or {}
@@ -1053,7 +1060,14 @@ def refresh_signals(
                     repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=f"{normalized_symbol} {mode} output degraded", payload=mode_output))
 
                 if auto_execute and signal_snapshot.signal in {"BUY", "SELL"}:
-                    command = ExecutionCommand(symbol=normalized_symbol, strategy_mode=mode, quantity=quantity, auto_execute=auto_execute, correlation_id=correlation_id)
+                    effective_quantity = normalized_quantity_map.get(normalized_symbol, quantity)
+                    command = ExecutionCommand(
+                        symbol=normalized_symbol,
+                        strategy_mode=mode,
+                        quantity=effective_quantity,
+                        auto_execute=auto_execute,
+                        correlation_id=correlation_id,
+                    )
                     current_row = repo.get_open_position_row(normalized_symbol, mode)
                     current_position = None if current_row is None else PositionState(id=current_row.id, symbol=current_row.symbol, strategy_mode=current_row.strategy_mode, side=current_row.side, quantity=current_row.quantity, avg_entry_price=current_row.avg_entry_price, current_price=current_row.current_price, market_value=current_row.market_value or 0.0, unrealized_pnl=current_row.unrealized_pnl or 0.0, realized_pnl=current_row.realized_pnl or 0.0, status=current_row.status, opened_at=current_row.opened_at, updated_at=current_row.updated_at)
                     intents = _build_trade_intents(current_position, signal_snapshot, command.quantity)

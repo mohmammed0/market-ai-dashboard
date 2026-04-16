@@ -978,23 +978,17 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
                     "signals": get_signal_history(limit=20),
                 }
             else:
-                for sym in symbols:
-                    qty = allocated_quantities.get(sym.upper(), fallback_qty)
-                    sub = refresh_signals(
-                        symbols=[sym],
-                        mode="classic",
-                        start_date=start_date,
-                        end_date=end_date,
-                        auto_execute=True,
-                        quantity=qty,
-                    )
-                    aggregate_items.extend(sub.get("items", []))
-                    last_correlation = sub.get("correlation_id") or last_correlation
-                result = {
-                    "items": aggregate_items,
-                    "correlation_id": last_correlation,
-                    "portfolio": (sub or {}).get("portfolio", {}) if symbols else {},
-                }
+                result = refresh_signals(
+                    symbols=symbols,
+                    mode="classic",
+                    start_date=start_date,
+                    end_date=end_date,
+                    auto_execute=True,
+                    quantity=fallback_qty,
+                    quantity_map=allocated_quantities,
+                )
+                aggregate_items = list(result.get("items", []))
+                last_correlation = result.get("correlation_id") or last_correlation
             quantity = fallback_qty  # reported default; per-symbol used above
         else:
             result = refresh_signals(

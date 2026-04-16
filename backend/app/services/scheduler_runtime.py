@@ -125,7 +125,15 @@ def _refresh_news_feed_job():
 
 def _run_automation_job(job_name):
     try:
-        result = run_automation_job(job_name=job_name, dry_run=False)
+        preset = None
+        if str(job_name or "").strip().lower() == "auto_trading_cycle":
+            try:
+                from backend.app.services.runtime_settings import get_auto_trading_config
+
+                preset = str(get_auto_trading_config().get("universe_preset") or "").strip().upper() or None
+            except Exception:
+                preset = None
+        result = run_automation_job(job_name=job_name, dry_run=False, preset=preset or AUTOMATION_DEFAULT_PRESET)
         _record_job(job_name, result.get("status", "completed"), result.get("detail", "ok"))
     except Exception as exc:
         _record_job(job_name, "error", str(exc))
