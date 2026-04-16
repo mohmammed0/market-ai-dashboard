@@ -28,7 +28,6 @@ export function AppDataProvider({ children }) {
     const sections = [
       { key: "dashboardLite",   url: "/api/dashboard/lite",            interval: 45000, cacheTtlMs: 5000 },
       { key: "portfolioSnapshot", url: "/api/portfolio/snapshot",      interval: 30000, cacheTtlMs: 5000 },
-      { key: "paperSignals",    url: "/api/paper/signals",             interval: 60000, cacheTtlMs: 5000 },
       { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000, cacheTtlMs: 15000 },
     ];
 

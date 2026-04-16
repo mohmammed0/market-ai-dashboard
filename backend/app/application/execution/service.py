@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
 from uuid import uuid4
@@ -134,6 +135,89 @@ def _build_quote_lookup(symbols) -> dict[str, dict]:
         for item in snapshot.get("items", [])
         if item.get("symbol")
     }
+
+
+def _resolve_analysis_concurrency(symbol_count: int) -> int:
+    import os
+
+    try:
+        configured = int(os.environ.get("MARKET_AI_ANALYSIS_CONCURRENCY", "1"))
+    except Exception:
+        configured = 1
+    return max(1, min(configured, max(int(symbol_count or 0), 1), 8))
+
+
+def _analyze_symbol_payload(
+    symbol: str,
+    strategy_mode: str,
+    start_date: str,
+    end_date: str,
+    quote_lookup: dict[str, dict] | None = None,
+) -> dict:
+    result = build_smart_analysis(symbol, start_date, end_date, include_dl=True, include_ensemble=True)
+    if "error" in result:
+        return {
+            "symbol": symbol,
+            "result": result,
+            "signal_snapshot": None,
+            "error": result.get("error"),
+        }
+
+    signal_snapshot = _build_signal_snapshot(symbol, strategy_mode, result, start_date, end_date, quote_lookup=quote_lookup)
+    return {
+        "symbol": symbol,
+        "result": result,
+        "signal_snapshot": signal_snapshot,
+        "error": None,
+    }
+
+
+def _collect_symbol_analyses(
+    symbols: list[str],
+    strategy_mode: str,
+    start_date: str,
+    end_date: str,
+    quote_lookup: dict[str, dict] | None = None,
+) -> tuple[list[dict], int]:
+    concurrency = _resolve_analysis_concurrency(len(symbols))
+    if concurrency <= 1 or len(symbols) <= 1:
+        return [
+            _analyze_symbol_payload(
+                symbol,
+                strategy_mode,
+                start_date,
+                end_date,
+                quote_lookup=quote_lookup,
+            )
+            for symbol in symbols
+        ], 1
+
+    ordered_results: list[dict | None] = [None] * len(symbols)
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="signal-analysis") as executor:
+        future_map = {
+            executor.submit(
+                _analyze_symbol_payload,
+                symbol,
+                strategy_mode,
+                start_date,
+                end_date,
+                quote_lookup,
+            ): (index, symbol)
+            for index, symbol in enumerate(symbols)
+        }
+        for future in as_completed(future_map):
+            index, symbol = future_map[future]
+            try:
+                ordered_results[index] = future.result()
+            except Exception as exc:
+                ordered_results[index] = {
+                    "symbol": symbol,
+                    "result": {"error": str(exc)},
+                    "signal_snapshot": None,
+                    "error": str(exc),
+                }
+
+    return [item for item in ordered_results if item is not None], concurrency
 
 
 def _latest_price(symbol: str, fallback_price=None, quote_lookup: dict[str, dict] | None = None):
@@ -913,19 +997,39 @@ def refresh_signals(
 
     items = []
     quote_lookup = _build_quote_lookup(normalized_symbols)
-    with session_scope() as session:
-        repo = ExecutionRepository(session)
-        log_event(logger, logging.INFO, "execution.refresh.started", strategy_mode=mode, symbols=len(normalized_symbols), auto_execute=auto_execute, correlation_id=correlation_id)
-        for normalized_symbol in normalized_symbols:
-            try:
-                result = build_smart_analysis(normalized_symbol, start_date, end_date, include_dl=True, include_ensemble=True)
-                if "error" in result:
-                    repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=result.get("error", "signal refresh error"), payload=result))
-                    repo.append_audit_event(ExecutionEventRecord(event_type="signal_refresh_error", symbol=normalized_symbol, strategy_mode=mode, correlation_id=correlation_id, payload=result))
-                    items.append({"symbol": normalized_symbol, "strategy_mode": mode, "error": result.get("error")})
+    analyzed_symbols, analysis_concurrency = _collect_symbol_analyses(
+        normalized_symbols,
+        mode,
+        start_date,
+        end_date,
+        quote_lookup=quote_lookup,
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "execution.refresh.started",
+        strategy_mode=mode,
+        symbols=len(normalized_symbols),
+        auto_execute=auto_execute,
+        correlation_id=correlation_id,
+        analysis_concurrency=analysis_concurrency,
+    )
+
+    for analyzed in analyzed_symbols:
+        normalized_symbol = analyzed["symbol"]
+        result = analyzed["result"] or {}
+        signal_snapshot = analyzed["signal_snapshot"]
+        try:
+            with session_scope() as session:
+                repo = ExecutionRepository(session)
+
+                if analyzed.get("error") or "error" in result:
+                    error_message = analyzed.get("error") or result.get("error") or "signal refresh error"
+                    repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=error_message, payload=result))
+                    repo.append_audit_event(ExecutionEventRecord(event_type="signal_refresh_error", symbol=normalized_symbol, strategy_mode=mode, correlation_id=correlation_id, payload={"error": error_message, **result}))
+                    items.append({"symbol": normalized_symbol, "strategy_mode": mode, "error": error_message})
                     continue
 
-                signal_snapshot = _build_signal_snapshot(normalized_symbol, mode, result, start_date, end_date, quote_lookup=quote_lookup)
                 signal_id = _build_signal_id(normalized_symbol, mode, correlation_id)
                 previous_signal = repo.latest_signal(normalized_symbol, mode)
                 repo.append_signal(SignalRecord(symbol=normalized_symbol, strategy_mode=mode, signal=signal_snapshot.signal, confidence=signal_snapshot.confidence, price=signal_snapshot.price, reasoning=signal_snapshot.reasoning, payload=signal_snapshot.analysis_payload))
@@ -959,21 +1063,25 @@ def refresh_signals(
                             current_row = None
 
                 items.append({"symbol": normalized_symbol, "strategy_mode": mode, "signal": signal_snapshot.signal, "confidence": signal_snapshot.confidence, "price": signal_snapshot.price, "reasoning": signal_snapshot.reasoning})
-            except Exception as exc:
-                log_event(logger, logging.WARNING, "execution.refresh.symbol_failed", symbol=normalized_symbol, strategy_mode=mode, error=str(exc), correlation_id=correlation_id)
+        except Exception as exc:
+            log_event(logger, logging.WARNING, "execution.refresh.symbol_failed", symbol=normalized_symbol, strategy_mode=mode, error=str(exc), correlation_id=correlation_id)
+            with session_scope() as session:
+                repo = ExecutionRepository(session)
                 repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=f"{normalized_symbol} signal refresh failed", payload={"error": str(exc)}))
                 repo.append_audit_event(ExecutionEventRecord(event_type="signal_refresh_exception", symbol=normalized_symbol, strategy_mode=mode, correlation_id=correlation_id, payload={"error": str(exc)}))
-                items.append({"symbol": normalized_symbol, "strategy_mode": mode, "error": str(exc)})
+            items.append({"symbol": normalized_symbol, "strategy_mode": mode, "error": str(exc)})
 
-        # Mark this correlation_id as completed so idempotency checks work.
+    with session_scope() as session:
+        repo = ExecutionRepository(session)
         repo.append_audit_event(ExecutionEventRecord(
             event_type="refresh_completed",
             correlation_id=correlation_id,
-            payload={"symbols": normalized_symbols, "mode": mode, "results": len(items)},
+            payload={"symbols": normalized_symbols, "mode": mode, "results": len(items), "analysis_concurrency": analysis_concurrency},
         ))
-        portfolio = get_internal_portfolio(limit=500)
-        alerts = get_alert_history(limit=20)
-        signals = get_signal_history(limit=20)
+
+    portfolio = get_internal_portfolio(limit=500)
+    alerts = get_alert_history(limit=20)
+    signals = get_signal_history(limit=20)
 
     log_event(logger, logging.INFO, "execution.refresh.completed", strategy_mode=mode, results=len(items), correlation_id=correlation_id)
     return {"items": items, "portfolio": portfolio, "alerts": alerts, "signals": signals, "correlation_id": correlation_id}

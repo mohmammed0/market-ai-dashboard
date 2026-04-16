@@ -17,8 +17,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: "0.5"
+          memory: ${MARKET_AI_DB_MEMORY_LIMIT:-1536M}
+          cpus: "${MARKET_AI_DB_CPU_LIMIT:-1.5}"
     shm_size: '128mb'
     command: >
       postgres
@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    command: ["sh", "-c", "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers ${MARKET_AI_BACKEND_WORKERS:-4}"]
     restart: unless-stopped
     depends_on:
       db:
@@ -70,6 +70,7 @@ services:
       MARKET_AI_DB_MAX_OVERFLOW: ${MARKET_AI_DB_MAX_OVERFLOW:-16}
       MARKET_AI_DB_POOL_RECYCLE_SECONDS: ${MARKET_AI_DB_POOL_RECYCLE_SECONDS:-1800}
       MARKET_AI_DB_CONNECT_TIMEOUT_SECONDS: ${MARKET_AI_DB_CONNECT_TIMEOUT_SECONDS:-10}
+      MARKET_AI_ANALYSIS_CONCURRENCY: ${MARKET_AI_ANALYSIS_CONCURRENCY:-6}
       MARKET_AI_LOG_LEVEL: ${MARKET_AI_LOG_LEVEL:-INFO}
       MARKET_AI_TRAINING_SUBPROCESS_ENABLED: ${MARKET_AI_TRAINING_SUBPROCESS_ENABLED:-1}
       MARKET_AI_REMOTE_TRAINING_ENABLED: ${MARKET_AI_REMOTE_TRAINING_ENABLED:-0}
@@ -137,8 +138,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M
-          cpus: "1.0"
+          memory: ${MARKET_AI_BACKEND_MEMORY_LIMIT:-4G}
+          cpus: "${MARKET_AI_BACKEND_CPU_LIMIT:-3.0}"
 
   automation:
     build:
@@ -184,6 +185,7 @@ services:
       MARKET_AI_DB_MAX_OVERFLOW: ${MARKET_AI_DB_MAX_OVERFLOW:-16}
       MARKET_AI_DB_POOL_RECYCLE_SECONDS: ${MARKET_AI_DB_POOL_RECYCLE_SECONDS:-1800}
       MARKET_AI_DB_CONNECT_TIMEOUT_SECONDS: ${MARKET_AI_DB_CONNECT_TIMEOUT_SECONDS:-10}
+      MARKET_AI_ANALYSIS_CONCURRENCY: ${MARKET_AI_ANALYSIS_CONCURRENCY:-6}
       MARKET_AI_LOG_LEVEL: ${MARKET_AI_LOG_LEVEL:-INFO}
       MARKET_AI_BROKER_PROVIDER: ${MARKET_AI_BROKER_PROVIDER:-alpaca}
       MARKET_AI_ALPACA_ENABLED: ${MARKET_AI_ALPACA_ENABLED:-1}
@@ -245,8 +247,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: "1.0"
+          memory: ${MARKET_AI_AUTOMATION_MEMORY_LIMIT:-5G}
+          cpus: "${MARKET_AI_AUTOMATION_CPU_LIMIT:-3.0}"
 
   redis:
     image: redis:7-alpine
@@ -262,8 +264,27 @@ services:
     deploy:
       resources:
         limits:
-          memory: 300M
-          cpus: "0.3"
+          memory: ${MARKET_AI_REDIS_MEMORY_LIMIT:-512M}
+          cpus: "${MARKET_AI_REDIS_CPU_LIMIT:-0.5}"
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${MARKET_AI_OLLAMA_MEMORY_LIMIT:-5G}
+          cpus: "${MARKET_AI_OLLAMA_CPU_LIMIT:-2.0}"
 
   frontend:
     build:
@@ -289,9 +310,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64M
-          cpus: "0.2"
+          memory: ${MARKET_AI_FRONTEND_MEMORY_LIMIT:-128M}
+          cpus: "${MARKET_AI_FRONTEND_CPU_LIMIT:-0.5}"
 
 volumes:
   postgres_data:
   redis_data:
+  ollama_data:

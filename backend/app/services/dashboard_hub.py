@@ -169,7 +169,7 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             telegram=safe_service_call(_telegram_status_payload, {"configured": False, "bot_token_set": False, "chat_id_set": False}),
         )
 
-    return cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=20)
+    return build_payload()
 
 
 def get_dashboard_market_widget() -> DashboardWidgetResponse:
@@ -185,7 +185,7 @@ def get_dashboard_market_widget() -> DashboardWidgetResponse:
             },
         )
 
-    return cache.get_or_set("dashboard:widget:market", build_payload, ttl_seconds=20)
+    return build_payload()
 
 
 def get_dashboard_portfolio_widget() -> DashboardWidgetResponse:
@@ -201,7 +201,7 @@ def get_dashboard_portfolio_widget() -> DashboardWidgetResponse:
             },
         )
 
-    return cache.get_or_set("dashboard:widget:portfolio", build_payload, ttl_seconds=20)
+    return build_payload()
 
 
 def get_dashboard_ops_widget() -> DashboardWidgetResponse:
@@ -222,4 +222,4 @@ def get_dashboard_ops_widget() -> DashboardWidgetResponse:
             },
         )
 
-    return cache.get_or_set("dashboard:widget:ops", build_payload, ttl_seconds=20)
+    return build_payload()

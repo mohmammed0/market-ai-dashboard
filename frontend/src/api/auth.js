@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+const rawApiBaseUrl = typeof import.meta.env.VITE_API_BASE_URL === "string"
+  ? import.meta.env.VITE_API_BASE_URL.trim()
+  : "";
+const API_BASE = rawApiBaseUrl === "/" ? "" : rawApiBaseUrl.replace(/\/+$/, "");
 
 export async function login(username, password) {
   const response = await fetch(`${API_BASE}/auth/login`, {
