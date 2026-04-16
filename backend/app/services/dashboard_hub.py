@@ -31,6 +31,41 @@ from core.telegram_notifier import get_telegram_status
 from core.ranking_service import summarize_long_short
 
 
+def _build_opportunities_from_signal_history(signal_items: list[dict], sample_symbols: list[str]) -> list[dict]:
+    sample_lookup = {str(symbol or "").strip().upper() for symbol in sample_symbols if str(symbol or "").strip()}
+    selected: list[dict] = []
+    seen: set[str] = set()
+
+    for item in signal_items:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol or (sample_lookup and symbol not in sample_lookup) or symbol in seen:
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        analysis = payload.get("analysis") if isinstance(payload, dict) else {}
+        signal_view = payload.get("signal_view") if isinstance(payload, dict) else {}
+        signal = str(item.get("signal") or signal_view.get("signal") or "HOLD").upper()
+        selected.append({
+            "symbol": symbol,
+            "signal": signal,
+            "confidence": float(item.get("confidence") or signal_view.get("confidence") or 0.0),
+            "score": analysis.get("enhanced_combined_score", analysis.get("combined_score")),
+            "reason": item.get("reasoning") or signal_view.get("reasoning") or analysis.get("ai_summary") or analysis.get("best_setup") or analysis.get("setup_type"),
+            "setup_type": analysis.get("setup_type"),
+            "best_setup": analysis.get("best_setup"),
+            "risk_label": analysis.get("trend_mode") or analysis.get("market_regime") or "RANGE",
+            "action": signal,
+        })
+        seen.add(symbol)
+        if len(selected) >= 6:
+            break
+
+    priority = {"BUY": 0, "HOLD": 1, "SELL": 2}
+    return sorted(
+        selected,
+        key=lambda row: (priority.get(str(row.get("signal") or "HOLD").upper(), 9), -float(row.get("confidence") or 0.0)),
+    )[:6]
+
+
 def get_dashboard_summary():
     cache = get_cache()
 
@@ -163,22 +198,27 @@ def get_dashboard_lite() -> DashboardLiteResponse:
 
     def build_payload() -> DashboardLiteResponse:
         sample_symbols = [symbol for symbol in DEFAULT_SAMPLE_SYMBOLS[:DEFAULT_TRACKED_SYMBOL_LIMIT] if str(symbol).strip()]
-        ranked_rows, _, _signal_counts = build_sample_scan_snapshot(sample_symbols)
-        top_opportunities = []
-        for row in ranked_rows[:6]:
-            symbol = row.get("instrument") or row.get("symbol")
-            signal = str(row.get("enhanced_signal") or row.get("smart_signal") or row.get("signal") or "HOLD").upper()
-            top_opportunities.append({
-                "symbol": symbol,
-                "signal": signal,
-                "confidence": float(row.get("confidence") or row.get("smart_confidence") or 0.0),
-                "score": row.get("enhanced_combined_score", row.get("combined_score")),
-                "reason": row.get("ai_summary") or row.get("best_setup") or row.get("setup_type") or row.get("reasons"),
-                "setup_type": row.get("setup_type"),
-                "best_setup": row.get("best_setup"),
-                "risk_label": row.get("trend_mode") or row.get("market_regime") or "RANGE",
-                "action": signal,
-            })
+        recent_signals_full = safe_service_call(lambda: get_signal_history(limit=max(len(sample_symbols) * 3, 24), compact=False), {"items": []})
+        recent_signals_compact = safe_service_call(lambda: get_signal_history(limit=8, compact=True), {"items": []})
+        recent_signal_items = recent_signals_full.get("items", []) if isinstance(recent_signals_full, dict) else []
+        top_opportunities = _build_opportunities_from_signal_history(recent_signal_items, sample_symbols)
+
+        if not top_opportunities:
+            ranked_rows, _, _signal_counts = build_sample_scan_snapshot(sample_symbols)
+            for row in ranked_rows[:6]:
+                symbol = row.get("instrument") or row.get("symbol")
+                signal = str(row.get("enhanced_signal") or row.get("smart_signal") or row.get("signal") or "HOLD").upper()
+                top_opportunities.append({
+                    "symbol": symbol,
+                    "signal": signal,
+                    "confidence": float(row.get("confidence") or row.get("smart_confidence") or 0.0),
+                    "score": row.get("enhanced_combined_score", row.get("combined_score")),
+                    "reason": row.get("ai_summary") or row.get("best_setup") or row.get("setup_type") or row.get("reasons"),
+                    "setup_type": row.get("setup_type"),
+                    "best_setup": row.get("best_setup"),
+                    "risk_label": row.get("trend_mode") or row.get("market_regime") or "RANGE",
+                    "action": signal,
+                })
         portfolio_snapshot = safe_service_call(
             build_portfolio_snapshot_payload,
             _empty_portfolio_snapshot(),
@@ -194,7 +234,7 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             portfolio_snapshot=portfolio_snapshot,
             market_overview=safe_service_call(get_market_overview, {"indices": [], "watchlists": [], "movers": []}),
             news=safe_service_call(lambda: _today_news_payload(limit=8), {"date": None, "items": []}),
-            signals=safe_service_call(lambda: get_signal_history(limit=8), {"items": []}),
+            signals=recent_signals_compact if isinstance(recent_signals_compact, dict) else {"items": []},
             opportunities={
                 "tracked_symbols": sample_symbols,
                 "items": top_opportunities,
@@ -211,7 +251,7 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             telegram={},
         )
 
-    return build_payload()
+    return cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=120)
 
 
 def get_dashboard_market_widget() -> DashboardWidgetResponse:
