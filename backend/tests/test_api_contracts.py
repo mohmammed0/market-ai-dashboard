@@ -167,6 +167,8 @@ class ApiContractsTests(unittest.TestCase):
         self.assertIn("portfolio_snapshot", payload)
         self.assertIn("market_overview", payload)
         self.assertIn("signals", payload)
+        self.assertIn("opportunities", payload)
+        self.assertIn("product_scope", payload)
         self.assertIn("auto_trading", payload)
         self.assertIn("automation", payload)
         self.assertIn("telegram", payload)

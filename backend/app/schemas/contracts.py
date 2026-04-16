@@ -65,6 +65,8 @@ class DashboardLiteResponse(BaseModel):
     market_overview: dict[str, Any] = Field(default_factory=dict)
     news: dict[str, Any] = Field(default_factory=dict)
     signals: dict[str, Any] = Field(default_factory=dict)
+    opportunities: dict[str, Any] = Field(default_factory=dict)
+    product_scope: dict[str, Any] = Field(default_factory=dict)
     auto_trading: dict[str, Any] = Field(default_factory=dict)
     automation: dict[str, Any] = Field(default_factory=dict)
     telegram: dict[str, Any] = Field(default_factory=dict)

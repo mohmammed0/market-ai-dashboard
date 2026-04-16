@@ -13,6 +13,7 @@ import SymbolPicker from "../components/ui/SymbolPicker";
 import TradingChart from "../components/ui/TradingChart";
 import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
+import { liquidateBrokerPortfolio } from "../api/broker";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import useJobRunner from "../hooks/useJobRunner";
 import { cancelPaperOrder, refreshPaperSignals } from "../lib/api";
@@ -20,6 +21,7 @@ import { buildRecentDateRange } from "../lib/dateDefaults";
 import { useAppData, useAppStore } from "../store/AppDataStore";
 import { useWorkspace } from "../lib/useWorkspace";
 
+const FALLBACK_FOCUSED_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "SPY", "QQQ"];
 
 export default function PaperTradingPage() {
   const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
@@ -28,13 +30,17 @@ export default function PaperTradingPage() {
   const [operatorSymbol, setOperatorSymbol] = useState("AAPL");
   const [activeTab, setActiveTab] = useState("positions");
   const [pageError, setPageError] = useState("");
+  const [liquidationBusy, setLiquidationBusy] = useState(false);
+  const [liquidationResult, setLiquidationResult] = useState(null);
 
   // Use pre-fetched data from global store
   const { data: portfolioSnapshot, loading: portfolioSnapshotLoading } = useAppData("portfolioSnapshot");
   const { data: signals, loading: signalsLoading } = useAppData("paperSignals");
+  const { data: dashboardLite } = useAppData("dashboardLite");
   const { fetchSection } = useAppStore() || {};
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
   const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
+  const brokerStatus = portfolioSnapshot?.broker_status || {};
   const positionsSectionLoading = portfolioSnapshotLoading;
   const ordersSectionLoading = portfolioSnapshotLoading;
   const tradesSectionLoading = portfolioSnapshotLoading;
@@ -71,12 +77,40 @@ export default function PaperTradingPage() {
 
   async function handleSignalRefresh() {
     setPageError("");
-    const watchlistSymbols = activeWatchlist?.symbols?.slice(0, 8) || [operatorSymbol];
+    const watchlistSymbols = focusedSymbols.slice(0, 8) || [operatorSymbol];
     await refreshJob.submit(() => refreshPaperSignals({
       symbols: watchlistSymbols, mode: "classic",
       start_date: defaultStartDate, end_date: todayIso,
       auto_execute: true, quantity: 1,
     }));
+  }
+
+  async function handleLiquidate() {
+    setPageError("");
+    setLiquidationResult(null);
+    if (!usingBrokerData || !brokerStatus?.paper) {
+      setPageError("تسييل المحفظة مسموح فقط عندما يكون مصدر التنفيذ هو الحساب الورقي للوسيط.");
+      return;
+    }
+    if (!window.confirm("سيتم إغلاق كل المراكز المفتوحة في الحساب الورقي وتحويلها إلى كاش. هل تريد المتابعة؟")) {
+      return;
+    }
+    setLiquidationBusy(true);
+    try {
+      const response = await liquidateBrokerPortfolio({ cancel_open_orders: true });
+      setLiquidationResult(response);
+      if (fetchSection) {
+        await fetchSection("portfolioSnapshot", "/api/portfolio/snapshot", { forceFresh: true });
+        await fetchSection("paperSignals", "/api/paper/signals", { forceFresh: true });
+        await fetchSection("dashboardLite", "/api/dashboard/lite", { forceFresh: true });
+      }
+      refreshDecision({ symbol: operatorSymbol }).catch(() => {});
+      setActiveTab("positions");
+    } catch (error) {
+      setPageError(error.message || "تعذر تسييل المحفظة الورقية.");
+    } finally {
+      setLiquidationBusy(false);
+    }
   }
 
   async function handleCancel(orderId) {
@@ -101,6 +135,11 @@ export default function PaperTradingPage() {
   const signalsList = useMemo(() => {
     return signals?.signals || signals?.items || (Array.isArray(signals) ? signals : []);
   }, [signals]);
+
+  const focusedSymbols = useMemo(() => {
+    const symbols = dashboardLite?.product_scope?.sample_symbols;
+    return Array.isArray(symbols) && symbols.length ? symbols : FALLBACK_FOCUSED_SYMBOLS;
+  }, [dashboardLite]);
 
   const portfolioColumns = useMemo(() => [
     { accessorKey: "symbol", header: "الرمز", cell: ({ row }) => (
@@ -167,7 +206,7 @@ export default function PaperTradingPage() {
 
   const quickSymbols = useMemo(() => {
     const seen = new Set();
-    return [operatorSymbol, ...(favoriteSymbols || []), ...((activeWatchlist?.symbols || []).slice(0, 6))]
+    return [operatorSymbol, ...(favoriteSymbols || []), ...((activeWatchlist?.symbols || []).slice(0, 4)), ...focusedSymbols]
       .filter((item) => {
         const normalized = String(item || "").trim().toUpperCase();
         if (!normalized || seen.has(normalized)) return false;
@@ -175,7 +214,7 @@ export default function PaperTradingPage() {
         return true;
       })
       .slice(0, 8);
-  }, [operatorSymbol, favoriteSymbols, activeWatchlist?.symbols]);
+  }, [operatorSymbol, favoriteSymbols, activeWatchlist?.symbols, focusedSymbols]);
 
   function handleOperatorSelect(item) {
     const normalized = String(item?.symbol || item || "").trim().toUpperCase();
@@ -236,6 +275,25 @@ export default function PaperTradingPage() {
                 </button>
               ))}
             </div>
+            <div className="info-banner" style={{ marginTop: 12 }}>
+              الكون التشغيلي الحالي: {focusedSymbols.join("، ")}
+            </div>
+            {usingBrokerData && brokerStatus?.paper ? (
+              <div className="info-banner" style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <span>
+                  اختبار fresh paper يعتمد على تسييل المراكز القديمة ثم إعادة تركيز الجولات على الكون المحدود فقط.
+                </span>
+                <button className="btn btn-danger btn-sm" type="button" onClick={() => handleLiquidate().catch(() => {})} disabled={liquidationBusy || positions.length === 0}>
+                  {liquidationBusy ? "جارٍ تسييل المحفظة..." : "تسييل المحفظة الورقية"}
+                </button>
+              </div>
+            ) : null}
+            {liquidationResult?.audit ? (
+              <div className="info-banner" style={{ marginTop: 12 }}>
+                قبل التسييل: {liquidationResult.audit.before_positions} مراكز / {liquidationResult.audit.before_open_orders} أوامر.
+                بعد التسييل: {liquidationResult.audit.after_positions} مراكز / {liquidationResult.audit.after_open_orders} أوامر.
+              </div>
+            ) : null}
           </div>
           <div className="paper-operator-stats">
             <MetricCard label="المصدر" value={sourceLabel} detail={usingBrokerData ? "Broker-connected snapshot" : "Internal simulated snapshot"} />

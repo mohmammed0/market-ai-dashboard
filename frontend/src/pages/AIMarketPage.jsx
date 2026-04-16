@@ -14,9 +14,10 @@ import SymbolPicker from "../components/ui/SymbolPicker";
 import { fetchFundamentals, fetchMacroCalendar, fetchQuoteSnapshot, fetchSymbolSignal } from "../api/intelligence";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import { buildRecentDateRange } from "../lib/dateDefaults";
+import { useAppData } from "../store/AppDataStore";
 import { useWorkspace } from "../lib/useWorkspace";
 
-const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ"];
+const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "SPY", "QQQ"];
 const INTERVALS = ["15", "60", "D", "W"];
 const CHART_STYLES = [
   { key: "1", label: "شموع" },
@@ -189,6 +190,7 @@ function MacroBoard({ macro, loading }) {
 
 export default function AIMarketPage() {
   const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
+  const { data: dashboardLite } = useAppData("dashboardLite");
   const [searchParams, setSearchParams] = useSearchParams();
   const { workspace, activeWatchlist, favoriteSymbols } = useWorkspace();
   const [symbol, setSymbol] = useState("AAPL");
@@ -254,12 +256,15 @@ export default function AIMarketPage() {
   }, [symbol]);
 
   const quickSymbols = useMemo(() => {
+    const scopedSymbols = Array.isArray(dashboardLite?.product_scope?.sample_symbols) && dashboardLite?.product_scope?.sample_symbols.length
+      ? dashboardLite.product_scope.sample_symbols
+      : DEFAULT_SYMBOLS;
     const seen = new Set();
     const values = [
       symbol,
       ...(favoriteSymbols || []),
-      ...((activeWatchlist?.symbols || []).slice(0, 6)),
-      ...DEFAULT_SYMBOLS,
+      ...((activeWatchlist?.symbols || []).slice(0, 4)),
+      ...scopedSymbols,
     ];
     return values.filter((item) => {
       const normalized = String(item || "").trim().toUpperCase();
@@ -267,7 +272,7 @@ export default function AIMarketPage() {
       seen.add(normalized);
       return true;
     }).slice(0, 8);
-  }, [symbol, favoriteSymbols, activeWatchlist?.symbols]);
+  }, [symbol, favoriteSymbols, activeWatchlist?.symbols, dashboardLite]);
 
   function updateSymbol(next) {
     const normalized = String(next?.symbol || next || "").trim().toUpperCase();

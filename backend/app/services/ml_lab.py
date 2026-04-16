@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from backend.app.config import ROOT_DIR
-from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
+from backend.app.core.date_defaults import indicator_warmup_start_date_iso, recent_end_date_iso, recent_start_date_iso
 from backend.app.models import ModelPrediction, ModelRun
 from backend.app.services.features import FEATURE_COLUMNS, build_feature_frame, create_target_labels
 from backend.app.services.market_data import DEFAULT_SYMBOLS, _load_local_csv, persist_feature_snapshot
@@ -341,7 +341,7 @@ def infer_latest(symbol="AAPL", start_date=None, end_date=None, run_id=None):
         return row_data
 
     bundle = joblib.load(row_data["artifact_path"])
-    resolved_start_date = start_date or recent_start_date_iso()
+    resolved_start_date = indicator_warmup_start_date_iso(start_date or recent_start_date_iso())
     resolved_end_date = end_date or recent_end_date_iso()
     raw = _load_local_csv(symbol, resolved_start_date, resolved_end_date)
     if raw.empty:

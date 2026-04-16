@@ -5,6 +5,9 @@ from datetime import date, timedelta
 from backend.app.config import DEFAULT_ANALYSIS_LOOKBACK_DAYS, DEFAULT_TRAINING_LOOKBACK_DAYS
 
 
+INDICATOR_WARMUP_DAYS = 90
+
+
 def recent_end_date_iso() -> str:
     return date.today().isoformat()
 
@@ -12,6 +15,15 @@ def recent_end_date_iso() -> str:
 def recent_start_date_iso(lookback_days: int | None = None) -> str:
     days = max(int(lookback_days or DEFAULT_ANALYSIS_LOOKBACK_DAYS), 7)
     return (date.today() - timedelta(days=days)).isoformat()
+
+
+def indicator_warmup_start_date_iso(start_date: str | None = None, warmup_days: int = INDICATOR_WARMUP_DAYS) -> str:
+    baseline = recent_start_date_iso() if not start_date else str(start_date)
+    try:
+        parsed = date.fromisoformat(baseline[:10])
+    except Exception:
+        return baseline
+    return (parsed - timedelta(days=max(int(warmup_days or 0), 0))).isoformat()
 
 
 def training_start_date_iso(lookback_days: int | None = None) -> str:

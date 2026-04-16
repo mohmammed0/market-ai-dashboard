@@ -96,4 +96,90 @@ def get_broker_orders(refresh: bool = False) -> dict:
 
 
 def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
-    return _liquidate_broker_positions(cancel_open_orders=cancel_open_orders)
+    before = get_broker_summary(refresh=True)
+    mode = str(before.get("mode") or "disabled").strip().lower()
+    paper = bool(before.get("paper", False))
+    provider = str(before.get("provider") or "none")
+    live_execution_enabled = bool(before.get("live_execution_enabled", False))
+    before_positions = len(before.get("positions") or [])
+    before_open_orders = int((before.get("totals") or {}).get("open_orders") or 0)
+
+    if provider == "none":
+        return {
+            "ok": False,
+            "error": "Broker provider is not configured.",
+            "audit": {
+                "provider": provider,
+                "mode": mode,
+                "paper": paper,
+                "before_positions": before_positions,
+                "before_open_orders": before_open_orders,
+            },
+        }
+
+    if not paper or mode != "paper" or live_execution_enabled:
+        return {
+            "ok": False,
+            "error": "Refusing to liquidate a non-paper broker account.",
+            "audit": {
+                "provider": provider,
+                "mode": mode,
+                "paper": paper,
+                "live_execution_enabled": live_execution_enabled,
+                "before_positions": before_positions,
+                "before_open_orders": before_open_orders,
+            },
+        }
+
+    result = _liquidate_broker_positions(cancel_open_orders=cancel_open_orders)
+    sync_result = None
+    after = None
+    if result.get("ok"):
+        try:
+            from backend.app.application.execution.service import sync_internal_positions_from_broker
+
+            sync_result = sync_internal_positions_from_broker(strategy_mode="classic")
+        except Exception as exc:
+            sync_result = {"ok": False, "error": str(exc)}
+        after = get_broker_summary(refresh=True)
+        log_event(
+            logger,
+            logging.WARNING,
+            "broker.paper_reset.executed",
+            provider=provider,
+            before_positions=before_positions,
+            after_positions=len((after or {}).get("positions") or []),
+            before_open_orders=before_open_orders,
+            after_open_orders=int(((after or {}).get("totals") or {}).get("open_orders") or 0),
+            sync_ok=bool(sync_result is None or sync_result.get("ok", True)),
+        )
+    else:
+        log_event(
+            logger,
+            logging.WARNING,
+            "broker.paper_reset.failed",
+            provider=provider,
+            before_positions=before_positions,
+            before_open_orders=before_open_orders,
+            error=result.get("error"),
+        )
+
+    result["audit"] = {
+        "provider": provider,
+        "mode": mode,
+        "paper": paper,
+        "live_execution_enabled": live_execution_enabled,
+        "before_positions": before_positions,
+        "before_open_orders": before_open_orders,
+        "after_positions": len((after or {}).get("positions") or []),
+        "after_open_orders": int(((after or {}).get("totals") or {}).get("open_orders") or 0),
+    }
+    if after is not None:
+        result["post_liquidation_summary"] = {
+            "account": after.get("account"),
+            "totals": after.get("totals"),
+            "positions": after.get("positions"),
+        }
+    if sync_result is not None:
+        result["internal_sync"] = sync_result
+    return result

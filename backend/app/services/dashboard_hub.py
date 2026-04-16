@@ -162,6 +162,23 @@ def get_dashboard_lite() -> DashboardLiteResponse:
     cache = get_cache()
 
     def build_payload() -> DashboardLiteResponse:
+        sample_symbols = [symbol for symbol in DEFAULT_SAMPLE_SYMBOLS[:DEFAULT_TRACKED_SYMBOL_LIMIT] if str(symbol).strip()]
+        ranked_rows, _, _signal_counts = build_sample_scan_snapshot(sample_symbols)
+        top_opportunities = []
+        for row in ranked_rows[:6]:
+            symbol = row.get("instrument") or row.get("symbol")
+            signal = str(row.get("enhanced_signal") or row.get("smart_signal") or row.get("signal") or "HOLD").upper()
+            top_opportunities.append({
+                "symbol": symbol,
+                "signal": signal,
+                "confidence": float(row.get("confidence") or row.get("smart_confidence") or 0.0),
+                "score": row.get("enhanced_combined_score", row.get("combined_score")),
+                "reason": row.get("ai_summary") or row.get("best_setup") or row.get("setup_type") or row.get("reasons"),
+                "setup_type": row.get("setup_type"),
+                "best_setup": row.get("best_setup"),
+                "risk_label": row.get("trend_mode") or row.get("market_regime") or "RANGE",
+                "action": signal,
+            })
         portfolio_snapshot = safe_service_call(
             build_portfolio_snapshot_payload,
             _empty_portfolio_snapshot(),
@@ -178,6 +195,17 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             market_overview=safe_service_call(get_market_overview, {"indices": [], "watchlists": [], "movers": []}),
             news=safe_service_call(lambda: _today_news_payload(limit=8), {"date": None, "items": []}),
             signals=safe_service_call(lambda: get_signal_history(limit=8), {"items": []}),
+            opportunities={
+                "tracked_symbols": sample_symbols,
+                "items": top_opportunities,
+                "count": len(top_opportunities),
+            },
+            product_scope={
+                "focused_product_mode": bool(FOCUSED_PRODUCT_MODE),
+                "tracked_symbols_limit": DEFAULT_TRACKED_SYMBOL_LIMIT,
+                "analysis_lookback_days": DEFAULT_ANALYSIS_LOOKBACK_DAYS,
+                "sample_symbols": sample_symbols,
+            },
             auto_trading=safe_service_call(get_auto_trading_config, {"auto_trading_enabled": False, "ready": False}),
             automation={},
             telegram={},

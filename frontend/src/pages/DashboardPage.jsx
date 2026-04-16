@@ -137,17 +137,19 @@ function NewsCard({ item, onNavigate }) {
   );
 }
 
-function SignalRow({ item, onNavigate }) {
+function OpportunityRow({ item, onNavigate }) {
   const signal = item?.signal || item?.action || item?.stance || "HOLD";
+  const confidence = Number(item?.confidence ?? 0);
+  const reason = item?.reason || item?.best_setup || item?.setup_type || item?.notes || "فرصة مرتبة من محرك القرار.";
   return (
     <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
       <div className="dashboard-list-copy">
         <strong>{item?.symbol || "—"}</strong>
-        <p>{item?.reason || item?.notes || item?.payload?.analysis?.close ? `Close ${item.payload.analysis.close}` : "إشارة محفوظة من محرك التنفيذ"}</p>
+        <p>{reason}</p>
       </div>
       <div className="dashboard-list-meta">
         <StatusBadge label={signal} tone={signalTone(signal)} dot={false} />
-        <span>{item?.confidence != null ? `${item.confidence}%` : compactDate(item?.created_at)}</span>
+        <span>{confidence > 0 ? `${confidence.toFixed(0)}%` : compactDate(item?.created_at)}</span>
       </div>
     </button>
   );
@@ -177,7 +179,8 @@ export default function DashboardPage() {
   const portfolioSnapshot = dashboardLite?.portfolio_snapshot || {};
   const ai = dashboardLite?.ai_status || {};
   const news = dashboardLite?.news || {};
-  const signals = dashboardLite?.signals || {};
+  const opportunitiesPayload = dashboardLite?.opportunities || {};
+  const productScope = dashboardLite?.product_scope || {};
   const autoTrading = dashboardLite?.auto_trading || {};
 
   const summary = portfolioSnapshot?.summary || {};
@@ -192,7 +195,7 @@ export default function DashboardPage() {
         .map((item, index) => ({ ...item, rank: item?.rank || index + 1 }));
   const positions = Array.isArray(portfolioSnapshot?.positions) ? portfolioSnapshot.positions : [];
   const trades = Array.isArray(portfolioSnapshot?.trades) ? portfolioSnapshot.trades : [];
-  const signalItems = Array.isArray(signals?.items) ? signals.items : [];
+  const opportunityItems = Array.isArray(opportunitiesPayload?.items) ? opportunitiesPayload.items : [];
   const newsItems = Array.isArray(news?.items) ? news.items : [];
 
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
@@ -227,8 +230,7 @@ export default function DashboardPage() {
           <span className="dashboard-hero-kicker">Research And Trading Workspace</span>
           <h2>واجهة تشغيل احترافية تضع أهم ما يهمك في أول الشاشة</h2>
           <p>
-            السوق، المحفظة، الذكاء، والأتمتة ضمن تسلسل بصري واحد. البيانات نفسها محفوظة، لكن العرض الآن أوضح وأكثر
-            قابلية لاتخاذ القرار.
+            السوق، أفضل الفرص، المخاطر، والأخبار في تسلسل واحد. ما لا يخدم القرار الفوري لم يعد ظاهرًا هنا.
           </p>
           <div className="dashboard-action-strip">
             <button className="btn btn-primary" type="button" onClick={() => navigate("/ai-market")}>
@@ -284,7 +286,12 @@ export default function DashboardPage() {
                 detail: `${totalTrades} صفقة`,
                 tone: Number(summary?.total_realized_pnl ?? 0) >= 0 ? "positive" : "negative",
               },
-              { label: "الإشارات النشطة", value: signalItems.length, detail: "آخر 8 إشارات", tone: "accent" },
+              {
+                label: "أفضل الفرص",
+                value: opportunityItems.length,
+                detail: `${productScope?.analysis_lookback_days || 30} يومًا · ${productScope?.tracked_symbols_limit || 8} رموز`,
+                tone: "accent",
+              },
             ]}
           />
 
@@ -333,8 +340,8 @@ export default function DashboardPage() {
 
             <SectionCard
               className="col-span-5"
-              title="مصدر بيانات التنفيذ"
-              description="اللقطة التشغيلية الحالية للمحفظة والطبقة التي تعتمد عليها الواجهة."
+              title="المحفظة والمخاطر"
+              description="لقطة المحفظة الحالية مع التركيز على الرصيد، التعرض، والمراكز المؤثرة على القرار."
               action={<StatusBadge label={sourceLabel} tone={sourceTone(usingBrokerData)} dot={false} />}
             >
               <div className="dashboard-source-card" data-testid="dashboard-source-badge">
@@ -346,7 +353,7 @@ export default function DashboardPage() {
                 <MetricCard label="المراكز المفتوحة" value={openPositions} detail="نشطة الآن" />
                 <MetricCard label="الصفقات" value={totalTrades} detail="سجل التنفيذ" />
                 <MetricCard label="الفوز %" value={summary?.win_rate_pct != null ? `${Number(summary.win_rate_pct).toFixed(1)}%` : "—"} detail="منفصل عن الإشارة" />
-                <MetricCard label="المصدر" value={usingBrokerData ? "Broker Paper" : "Internal Simulated"} detail="Canonical snapshot" />
+                <MetricCard label="التعرض السوقي" value={money(summary?.total_market_value ?? 0)} detail="Market exposure" />
               </div>
 
               <div className="dashboard-subsection">
@@ -391,30 +398,16 @@ export default function DashboardPage() {
 
             <SectionCard
               className="col-span-6"
-              title="رادار الإشارات"
-              description="آخر الإشارات المحفوظة في النظام مع انتقال مباشر إلى شاشة التنفيذ."
-              action={<StatusBadge label={signalItems.length ? `${signalItems.length} إشارة` : "بدون"} tone={signalItems.length ? "positive" : "subtle"} dot={false} />}
+              title="أفضل الفرص الآن"
+              description="ترتيب مركّز لأعلى الفرص من الكون الصغير النشط، مع ثقة وسبب مختصر وانتقال مباشر إلى القرار."
+              action={<StatusBadge label={opportunityItems.length ? `${opportunityItems.length} فرصة` : "بدون"} tone={opportunityItems.length ? "positive" : "subtle"} dot={false} />}
             >
               <div className="dashboard-list">
-                {signalItems.length ? (
-                  signalItems.slice(0, 8).map((item, index) => <SignalRow key={`${item.symbol || "signal"}-${index}`} item={item} onNavigate={navigate} />)
+                {opportunityItems.length ? (
+                  opportunityItems.map((item, index) => <OpportunityRow key={`${item.symbol || "opportunity"}-${index}`} item={item} onNavigate={navigate} />)
                 ) : (
-                  <EmptyState title="لا توجد إشارات حديثة" description="حدّث الإشارات من صفحة التداول الورقي أو افتح محطة التحليل لإنتاج إشارة جديدة." />
+                  <EmptyState title="لا توجد فرص مرتبة بعد" description="حدّث الإشارات أو افتح محطة التحليل لإنتاج فرص جديدة من الكون النشط." />
                 )}
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              className="col-span-6"
-              title="حالة النظام"
-              description="مراقبة الذكاء والأتمتة ضمن سطح مختصر يخدم القرار فقط."
-              action={<StatusBadge label={aiReady} tone={statusTone(aiReady)} dot={false} />}
-            >
-              <div className="dashboard-system-grid">
-                <MetricCard label="AI" value={aiReady} detail={aiProvider} tone={statusTone(aiReady)} />
-                <MetricCard label="Automation" value={autoTradingLabel} detail={autoTrading?.ready ? "جاهز للتنفيذ" : "تحت المراقبة"} tone={statusTone(autoTrading?.ready ? "ready" : autoTrading?.auto_trading_enabled ? "warning" : "disabled")} />
-                <MetricCard label="الكون النشط" value={featured.length || indices.length || 0} detail="رموز مراقبة محدودة" tone="accent" />
-                <MetricCard label="النطاق الافتراضي" value="30 يومًا" detail="نافذة التحليل الحالية" tone="info" />
               </div>
             </SectionCard>
           </div>

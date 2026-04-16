@@ -127,6 +127,15 @@ def _scored_item(symbol, title, source, link, pub_date, *, relation="fresh", nov
     }
 
 
+def _resolve_semantic_match_key(seen_semantic: dict, semantic_key: str) -> str | None:
+    for existing_key in seen_semantic:
+        if existing_key == semantic_key:
+            return existing_key
+        if existing_key.startswith(semantic_key) or semantic_key.startswith(existing_key):
+            return existing_key
+    return None
+
+
 def fetch_news(symbol="AAPL", limit=10):
     symbol = symbol.upper().strip()
     query = urllib.parse.quote(symbol + " stock")
@@ -160,7 +169,8 @@ def fetch_news(symbol="AAPL", limit=10):
 
         semantic_key = headline_signature(title)
         scored = _scored_item(symbol, title, source, link, pub_date)
-        previous = seen_semantic.get(semantic_key)
+        matched_semantic_key = _resolve_semantic_match_key(seen_semantic, semantic_key)
+        previous = seen_semantic.get(matched_semantic_key) if matched_semantic_key else None
         if previous:
             previous_rank = (
                 previous["source_quality_score"],
@@ -175,6 +185,7 @@ def fetch_news(symbol="AAPL", limit=10):
             if current_rank > previous_rank:
                 replacement = _scored_item(symbol, title, source, link, pub_date, relation="event_update", novelty_score=0.55)
                 news_items[previous["index"]] = replacement
+                seen_semantic.pop(matched_semantic_key, None)
                 seen_semantic[semantic_key] = {"index": previous["index"], **replacement}
             continue
 
