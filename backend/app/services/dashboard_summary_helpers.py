@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from backend.app.core.date_defaults import recent_start_date_iso
 from backend.app.services.cached_analysis import get_base_analysis_results_batch
 from core.ranking_service import rank_scan_results
 
@@ -22,7 +23,7 @@ def build_sample_scan_snapshot(sample_symbols: list[str]) -> tuple[list[dict], d
 
     all_results = get_base_analysis_results_batch(
         sample_symbols,
-        "2024-01-01",
+        recent_start_date_iso(),
         current_end_date,
         ttl_seconds=600,
         max_workers=4,

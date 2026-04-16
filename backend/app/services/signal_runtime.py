@@ -9,7 +9,7 @@ from backend.app.services.ensemble import build_ensemble_output
 from backend.app.services.ml_lab import infer_latest
 
 
-def build_smart_analysis(symbol, start_date, end_date, include_dl=True, include_ensemble=True):
+def build_smart_analysis(symbol, start_date, end_date, include_dl=False, include_ensemble=True):
     classic = analyze_symbol(symbol, start_date, end_date)
     if "error" in classic:
         return classic
@@ -30,11 +30,13 @@ def extract_signal_view(result: dict, mode="classic"):
     mode = str(mode or "classic").lower().strip()
     if not isinstance(result, dict):
         return {"mode": mode, "signal": "HOLD", "confidence": 0.0, "price": None, "reasoning": "invalid result"}
+    from backend.app.services.explainability import build_signal_explanation
+    explanation = build_signal_explanation(result)
 
     if mode == "classic":
         signal = str(result.get("enhanced_signal", result.get("signal", "HOLD"))).upper()
         confidence = float(result.get("confidence", 0.0) or 0.0)
-        reasoning = result.get("setup_type") or result.get("reasons") or "classic ranked signal"
+        reasoning = explanation.get("summary") or result.get("setup_type") or result.get("reasons") or "classic ranked signal"
     elif mode == "ml":
         ml = result.get("ml_output") or {}
         signal = str(ml.get("signal", "HOLD")).upper()
@@ -49,11 +51,12 @@ def extract_signal_view(result: dict, mode="classic"):
         ensemble = result.get("ensemble_output") or {}
         signal = str(ensemble.get("signal", "HOLD")).upper()
         confidence = float(ensemble.get("confidence", 0.0) or 0.0)
-        reasoning = ensemble.get("reasoning") or "ensemble output"
+        reasoning = explanation.get("summary") or ensemble.get("reasoning") or "ensemble output"
     elif mode == "vectorbt":
         instrument = result.get("instrument") or result.get("symbol")
-        start_date = result.get("start_date", "2024-01-01")
-        end_date = result.get("end_date", "2026-04-02")
+        from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
+        start_date = result.get("start_date", recent_start_date_iso())
+        end_date = result.get("end_date", recent_end_date_iso())
         bt_result = backtest_symbol_enhanced(instrument=instrument, start_date=start_date, end_date=end_date, hold_days=10)
         events = bt_result.get("events", [])
         last_event = events[-1] if events else {}

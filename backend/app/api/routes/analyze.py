@@ -16,7 +16,7 @@ def analyze(payload: AnalyzeRequest):
             start_date=payload.start_date,
             end_date=payload.end_date,
             include_ml=True,
-            include_dl=True,
+            include_dl=False,
         )
         return raise_for_error_payload(result, default_status=503)
     except Exception as exc:

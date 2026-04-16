@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from backend.app.config import ROOT_DIR
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.models import ModelPrediction, ModelRun
 from backend.app.services.features import FEATURE_COLUMNS, build_feature_frame, create_target_labels
 from backend.app.services.market_data import DEFAULT_SYMBOLS, _load_local_csv
@@ -254,7 +255,7 @@ def train_sequence_model(
     }
 
 
-def infer_sequence(symbol="AAPL", start_date="2024-01-01", end_date="2026-04-02", run_id=None):
+def infer_sequence(symbol="AAPL", start_date=None, end_date=None, run_id=None):
     if torch is None:
         return _dependency_error()
 
@@ -263,7 +264,7 @@ def infer_sequence(symbol="AAPL", start_date="2024-01-01", end_date="2026-04-02"
         return row_data
 
     checkpoint = torch.load(row_data["artifact_path"], map_location="cpu")
-    raw = _load_local_csv(symbol, start_date, end_date)
+    raw = _load_local_csv(symbol, start_date or recent_start_date_iso(), end_date or recent_end_date_iso())
     if raw.empty:
         return {"error": f"No local history for {symbol}"}
 

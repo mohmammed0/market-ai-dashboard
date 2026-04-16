@@ -23,6 +23,8 @@ def build_signal_explanation(result: dict) -> dict:
     mtf_score = float(result.get("mtf_score", 0.0) or 0.0)
     rs_score = float(result.get("rs_score", 0.0) or 0.0)
     trend_quality_score = float(result.get("trend_quality_score", 0.0) or 0.0)
+    ml_output = result.get("ml_output") or {}
+    news_items = result.get("news_items") or []
 
     if technical_score > 0:
         supporting.append(f"Technical score is supportive at {technical_score:.1f}.")
@@ -51,6 +53,23 @@ def build_signal_explanation(result: dict) -> dict:
     if result.get("squeeze_ready"):
         supporting.append("Squeeze / breakout readiness is active.")
 
+    if isinstance(ml_output, dict) and not ml_output.get("error"):
+        prob_buy = float(ml_output.get("prob_buy", 0.0) or 0.0)
+        prob_sell = float(ml_output.get("prob_sell", 0.0) or 0.0)
+        if prob_buy > prob_sell and prob_buy >= 0.45:
+            supporting.append(f"ML ranking leans long with buy probability at {prob_buy:.2f}.")
+        elif prob_sell > prob_buy and prob_sell >= 0.45:
+            contradictory.append(f"ML ranking leans defensive with sell probability at {prob_sell:.2f}.")
+
+    if news_items:
+        lead_news = news_items[0]
+        news_tone = str(lead_news.get("sentiment") or "").upper()
+        news_event = str(lead_news.get("event_type") or "general").replace("_", " ")
+        if news_tone == "POSITIVE":
+            supporting.append(f"Recent news flow is supportive, led by a {news_event} headline.")
+        elif news_tone == "NEGATIVE":
+            contradictory.append(f"Recent news flow is adverse, led by a {news_event} headline.")
+
     if confidence < 55:
         invalidators.append("Confidence is still modest, so the setup may not survive a small regime change.")
     if signal == "BUY" and (mtf_score < 0 or rs_score < 0):
@@ -72,7 +91,7 @@ def build_signal_explanation(result: dict) -> dict:
     return {
         "signal": signal,
         "confidence": round(confidence, 2),
-        "summary": f"{signal} with {confidence:.0f} confidence based on the current ranked signal stack.",
+        "summary": f"{signal} with {confidence:.0f} confidence from technical alignment, lightweight ML ranking, and the latest validated news context.",
         "supporting_factors": supporting[:5],
         "contradictory_factors": contradictory[:5],
         "invalidators": invalidators[:4],

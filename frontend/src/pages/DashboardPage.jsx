@@ -153,21 +153,6 @@ function SignalRow({ item, onNavigate }) {
   );
 }
 
-function JobRow({ item }) {
-  return (
-    <div className="dashboard-list-item">
-      <div className="dashboard-list-copy">
-        <strong>{item?.type || "تشغيل"}</strong>
-        <p>{compactDate(item?.created_at || item?.updated_at)}</p>
-      </div>
-      <div className="dashboard-list-meta">
-        <StatusBadge label={item?.status || "unknown"} tone={statusTone(item?.status)} dot={false} />
-        {item?.progress != null ? <span>{item.progress}%</span> : null}
-      </div>
-    </div>
-  );
-}
-
 function PositionRow({ item, onNavigate }) {
   const pnl = Number(item?.unrealized_pnl ?? 0);
   return (
@@ -194,8 +179,6 @@ export default function DashboardPage() {
   const news = dashboardLite?.news || {};
   const signals = dashboardLite?.signals || {};
   const autoTrading = dashboardLite?.auto_trading || {};
-  const automation = dashboardLite?.automation || {};
-  const telegram = dashboardLite?.telegram || {};
 
   const summary = portfolioSnapshot?.summary || {};
   const indices = Array.isArray(market?.indices) ? market.indices : [];
@@ -211,7 +194,6 @@ export default function DashboardPage() {
   const trades = Array.isArray(portfolioSnapshot?.trades) ? portfolioSnapshot.trades : [];
   const signalItems = Array.isArray(signals?.items) ? signals.items : [];
   const newsItems = Array.isArray(news?.items) ? news.items : [];
-  const recentJobs = Array.isArray(automation?.recent_jobs) ? automation.recent_jobs : Array.isArray(automation?.jobs) ? automation.jobs : [];
 
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
   const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
@@ -229,7 +211,7 @@ export default function DashboardPage() {
   return (
     <PageFrame
       title="لوحة القيادة"
-      description="لوحة تشغيل موحدة تُبرز السوق، المحفظة، الإشارات، والأتمتة في مساحة واحدة سهلة القراءة."
+      description="لوحة تشغيل مركزة تُبرز السوق، المحفظة، الإشارات، وأفضل الفرص فقط."
       eyebrow="Live Summary"
       headerActions={
         <>
@@ -276,7 +258,7 @@ export default function DashboardPage() {
               <StatusBadge label={autoTradingLabel} tone={statusTone(autoTrading?.ready ? "ready" : autoTrading?.auto_trading_enabled ? "warning" : "disabled")} dot={false} />
             </div>
             <div className="dashboard-hero-pulse-value">{autoTrading?.ready ? "Ready" : "Standby"}</div>
-            <p>{telegram?.configured ? "Telegram configured" : "Telegram not configured"}</p>
+            <p>{autoTrading?.ready ? "الدورة جاهزة لمسح الكون المحدود" : "الدورة تعمل بموارد مقيدة ومراقبة"}</p>
           </div>
         </div>
       </section>
@@ -425,29 +407,14 @@ export default function DashboardPage() {
             <SectionCard
               className="col-span-6"
               title="حالة النظام"
-              description="مراقبة الذكاء، الأتمتة، والإشعارات في سطح واحد سريع القراءة."
+              description="مراقبة الذكاء والأتمتة ضمن سطح مختصر يخدم القرار فقط."
               action={<StatusBadge label={aiReady} tone={statusTone(aiReady)} dot={false} />}
             >
               <div className="dashboard-system-grid">
                 <MetricCard label="AI" value={aiReady} detail={aiProvider} tone={statusTone(aiReady)} />
                 <MetricCard label="Automation" value={autoTradingLabel} detail={autoTrading?.ready ? "جاهز للتنفيذ" : "تحت المراقبة"} tone={statusTone(autoTrading?.ready ? "ready" : autoTrading?.auto_trading_enabled ? "warning" : "disabled")} />
-                <MetricCard label="Telegram" value={telegram?.configured ? "Configured" : "Not configured"} detail={telegram?.chat_id_set ? "Chat ID available" : "Missing chat id"} tone={telegram?.configured ? "info" : "warning"} />
-                <MetricCard label="Jobs" value={recentJobs.length} detail="آخر المهام" tone="accent" />
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              className="col-span-6"
-              title="التشغيلات الأخيرة"
-              description="آخر المهام الخلفية القادمة من طبقة الأتمتة والعمليات."
-              action={<StatusBadge label={recentJobs.length ? `${recentJobs.length} تشغيلات` : "لا توجد"} tone={recentJobs.length ? "accent" : "subtle"} dot={false} />}
-            >
-              <div className="dashboard-list">
-                {recentJobs.length ? (
-                  recentJobs.slice(0, 6).map((item, index) => <JobRow key={`${item.job_id || item.type || "job"}-${index}`} item={item} />)
-                ) : (
-                  <EmptyState title="لا توجد تشغيلات حديثة" description="سيتحدث هذا القسم تلقائيًا عند عمل scheduler أو تشغيل Job يدوي." />
-                )}
+                <MetricCard label="الكون النشط" value={featured.length || indices.length || 0} detail="رموز مراقبة محدودة" tone="accent" />
+                <MetricCard label="النطاق الافتراضي" value="30 يومًا" detail="نافذة التحليل الحالية" tone="info" />
               </div>
             </SectionCard>
           </div>

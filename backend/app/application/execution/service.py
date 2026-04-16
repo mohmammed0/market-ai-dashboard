@@ -9,6 +9,7 @@ import logging
 import os
 
 from backend.app.application.broker.service import get_broker_summary
+from backend.app.core.date_defaults import analysis_window_iso
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.domain.alerts.contracts import AlertRecord
 from backend.app.domain.execution.contracts import (
@@ -188,7 +189,7 @@ def _analyze_symbol_payload(
     end_date: str,
     quote_lookup: dict[str, dict] | None = None,
 ) -> dict:
-    result = build_smart_analysis(symbol, start_date, end_date, include_dl=True, include_ensemble=True)
+    result = build_smart_analysis(symbol, start_date, end_date, include_dl=False, include_ensemble=True)
     if "error" in result:
         return {
             "symbol": symbol,
@@ -983,13 +984,14 @@ def _apply_trade_intent(
 def refresh_signals(
     symbols,
     mode="classic",
-    start_date="2024-01-01",
-    end_date="2026-04-02",
+    start_date=None,
+    end_date=None,
     auto_execute=True,
     quantity=1.0,
     quantity_map: dict[str, float] | None = None,
     idempotency_key: str | None = None,
 ):
+    resolved_start_date, resolved_end_date = analysis_window_iso(start_date, end_date)
     normalized_symbols = []
     for symbol in symbols or []:
         normalized_symbol = str(symbol or "").strip().upper()
@@ -1007,7 +1009,13 @@ def refresh_signals(
             repo.append_audit_event(ExecutionEventRecord(
                 event_type="halt_blocked_refresh",
                 correlation_id=correlation_id,
-                payload={"symbols": normalized_symbols, "mode": mode, "auto_execute": auto_execute},
+                payload={
+                    "symbols": normalized_symbols,
+                    "mode": mode,
+                    "auto_execute": auto_execute,
+                    "start_date": resolved_start_date,
+                    "end_date": resolved_end_date,
+                },
             ))
         log_event(logger, logging.WARNING, "execution.refresh.halted", correlation_id=correlation_id, symbols=len(normalized_symbols))
         return {"halted": True, "correlation_id": correlation_id, "items": [], "portfolio": {}, "alerts": {}, "signals": {}}
@@ -1035,8 +1043,8 @@ def refresh_signals(
     analyzed_symbols, analysis_concurrency = _collect_symbol_analyses(
         normalized_symbols,
         mode,
-        start_date,
-        end_date,
+        resolved_start_date,
+        resolved_end_date,
         quote_lookup=quote_lookup,
     )
     log_event(
@@ -1124,7 +1132,14 @@ def refresh_signals(
         repo.append_audit_event(ExecutionEventRecord(
             event_type="refresh_completed",
             correlation_id=correlation_id,
-            payload={"symbols": normalized_symbols, "mode": mode, "results": len(items), "analysis_concurrency": analysis_concurrency},
+            payload={
+                "symbols": normalized_symbols,
+                "mode": mode,
+                "start_date": resolved_start_date,
+                "end_date": resolved_end_date,
+                "results": len(items),
+                "analysis_concurrency": analysis_concurrency,
+            },
         ))
 
     portfolio = get_internal_portfolio(limit=500)

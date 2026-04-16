@@ -216,7 +216,7 @@ def run_strategy_evaluation(
     vectorbt = run_vectorbt_backtest(
         instrument=instrument, start_date=start_date, end_date=end_date, hold_days=hold_days,
     )
-    smart = build_smart_analysis(instrument, start_date, end_date, include_dl=True, include_ensemble=True)
+    smart = build_smart_analysis(instrument, start_date, end_date, include_dl=False, include_ensemble=True)
 
     summaries = []
     if "classic" in include_modes:

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.models import AlertHistory
 from backend.app.services.cached_analysis import get_ranked_analysis_result
 from backend.app.services.decision_support import build_decision_payload
@@ -237,22 +238,23 @@ def build_market_terminal_chart(
     }
 
 
-def build_market_terminal_context(symbol: str, start_date: str = "2024-01-01", end_date: str | None = None) -> dict:
+def build_market_terminal_context(symbol: str, start_date: str | None = None, end_date: str | None = None) -> dict:
     normalized_symbol = normalize_symbol(symbol)
-    resolved_end_date = end_date or date.today().isoformat()
+    resolved_start_date = start_date or recent_start_date_iso()
+    resolved_end_date = end_date or recent_end_date_iso()
     decision = build_decision_payload(
         normalized_symbol,
-        start_date,
+        resolved_start_date,
         resolved_end_date,
-        include_dl=True,
+        include_dl=False,
         include_ensemble=True,
     )
     analysis = decision.get("analysis") or get_ranked_analysis_result(
         normalized_symbol,
-        start_date,
+        resolved_start_date,
         resolved_end_date,
         include_ml=True,
-        include_dl=True,
+        include_dl=False,
         ttl_seconds=300,
     )
     risk = get_risk_dashboard()

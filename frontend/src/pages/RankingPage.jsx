@@ -25,13 +25,14 @@ import {
   universePresetSizeOptions,
 } from "../lib/forms";
 import { t } from "../lib/i18n";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 
 
 const ACTIVE_JOB_STATUSES = new Set(["pending", "running"]);
 
 
 export default function RankingPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [result, setResult] = useState(null);
   const [presetLoading, setPresetLoading] = useState(false);
   const [presetInfo, setPresetInfo] = useState(null);
@@ -57,10 +58,10 @@ export default function RankingPage() {
     resolver: zodResolver(symbolListSchema),
     defaultValues: {
       symbolsText: "AAPL,MSFT,NVDA,SPY",
-      startDate: "2024-01-01",
+      startDate: defaultStartDate,
       endDate: todayIso,
       universePreset: "CUSTOM",
-      presetLimit: "50",
+      presetLimit: "10",
     },
   });
 

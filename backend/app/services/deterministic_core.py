@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
+
 from backend.app.domain.platform.contracts import (
     AIBiasOverlay,
     ChartMarker,
@@ -284,10 +286,10 @@ def _build_decision_surface(
 
 def build_decision_package(
     symbol: str,
-    start_date: str = "2024-01-01",
+    start_date: str | None = None,
     end_date: str | None = None,
     *,
-    include_dl: bool = True,
+    include_dl: bool = False,
     include_ensemble: bool = True,
 ) -> DecisionPackage:
     """Build the canonical DecisionPackage using deterministic analysis only.
@@ -306,11 +308,12 @@ def build_decision_package(
     include_dl, include_ensemble : bool
         Whether to run DL inference and ensemble voting.
     """
-    resolved_end = end_date or date.today().isoformat()
+    resolved_start = start_date or recent_start_date_iso()
+    resolved_end = end_date or recent_end_date_iso()
 
     analysis = get_ranked_analysis_result(
         symbol,
-        start_date,
+        resolved_start,
         resolved_end,
         include_ml=True,
         include_dl=include_dl,

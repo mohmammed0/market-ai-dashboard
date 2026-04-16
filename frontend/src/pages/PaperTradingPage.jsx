@@ -16,12 +16,13 @@ import SummaryStrip from "../components/ui/SummaryStrip";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import useJobRunner from "../hooks/useJobRunner";
 import { cancelPaperOrder, refreshPaperSignals } from "../lib/api";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { useAppData, useAppStore } from "../store/AppDataStore";
 import { useWorkspace } from "../lib/useWorkspace";
 
 
 export default function PaperTradingPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const { workspace, activeWatchlist, favoriteSymbols } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const [operatorSymbol, setOperatorSymbol] = useState("AAPL");
@@ -43,7 +44,7 @@ export default function PaperTradingPage() {
   const refreshJob = useJobRunner("paper_signal_refresh", { recentLimit: 6 });
 
   const { decision, loading: decisionLoading, error: decisionError, refreshDecision } = useDecisionSurface({
-    symbol: operatorSymbol, startDate: "2024-01-01", endDate: todayIso, enabled: Boolean(operatorSymbol),
+    symbol: operatorSymbol, startDate: defaultStartDate, endDate: todayIso, enabled: Boolean(operatorSymbol),
   });
 
   // Set symbol from URL params or workspace
@@ -73,7 +74,7 @@ export default function PaperTradingPage() {
     const watchlistSymbols = activeWatchlist?.symbols?.slice(0, 8) || [operatorSymbol];
     await refreshJob.submit(() => refreshPaperSignals({
       symbols: watchlistSymbols, mode: "classic",
-      start_date: "2024-01-01", end_date: todayIso,
+      start_date: defaultStartDate, end_date: todayIso,
       auto_execute: true, quantity: 1,
     }));
   }

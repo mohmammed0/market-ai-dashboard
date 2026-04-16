@@ -43,7 +43,7 @@ def sync_alpaca_credentials_from_runtime() -> None:
         logger.warning("market_data.alpaca_credentials_sync_failed error=%s", exc)
 
 
-DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "SPY"]
+DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "SPY", "QQQ"]
 SOURCE_DIR = SOURCE_CACHE_DIR
 logger = logging.getLogger(__name__)
 

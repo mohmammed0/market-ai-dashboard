@@ -67,6 +67,7 @@ from backend.app.config import (
     CONTINUOUS_LEARNING_RUNNER_ROLE,
     CONTINUOUS_LEARNING_STARTUP_ENABLED,
     DATABASE_RUN_MIGRATIONS_ON_STARTUP,
+    FOCUSED_PRODUCT_MODE,
     FORWARDED_ALLOW_IPS,
     LOG_LEVEL,
     PROXY_HEADERS_ENABLED,
@@ -106,12 +107,13 @@ def _sync_runtime_credentials() -> None:
         sync_alpaca_credentials_from_runtime()
     except Exception:
         logger.exception("Failed to sync Alpaca credentials from runtime settings.")
-    try:
-        from backend.app.services.telegram_sync import sync_telegram_credentials_from_runtime
+    if not FOCUSED_PRODUCT_MODE:
+        try:
+            from backend.app.services.telegram_sync import sync_telegram_credentials_from_runtime
 
-        sync_telegram_credentials_from_runtime()
-    except Exception:
-        logger.exception("Failed to sync Telegram credentials from runtime settings.")
+            sync_telegram_credentials_from_runtime()
+        except Exception:
+            logger.exception("Failed to sync Telegram credentials from runtime settings.")
 
 
 def _startup_application_services() -> None:

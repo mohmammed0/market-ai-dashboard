@@ -1,11 +1,12 @@
 from pydantic import BaseModel, Field
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 
 
 class PaperSignalRefreshRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY"])
     mode: str = Field(default="classic")
-    start_date: str = Field(default="2024-01-01")
-    end_date: str = Field(default="2026-04-02")
+    start_date: str = Field(default_factory=recent_start_date_iso)
+    end_date: str = Field(default_factory=recent_end_date_iso)
     auto_execute: bool = Field(default=True)
     quantity: float = Field(default=1.0)
     idempotency_key: str | None = Field(

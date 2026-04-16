@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 
 
 class TrainMLRequest(BaseModel):
@@ -29,25 +30,25 @@ class TrainDLRequest(BaseModel):
 
 class InferenceRequest(BaseModel):
     symbol: str = Field(default="AAPL")
-    start_date: str = Field(default="2024-01-01")
-    end_date: str = Field(default="2026-04-02")
-    include_dl: bool = Field(default=True)
+    start_date: str = Field(default_factory=recent_start_date_iso)
+    end_date: str = Field(default_factory=recent_end_date_iso)
+    include_dl: bool = Field(default=False)
     include_ensemble: bool = Field(default=True)
     run_id: str | None = Field(default=None)
 
 
 class BatchInferenceRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY"])
-    start_date: str = Field(default="2024-01-01")
-    end_date: str = Field(default="2026-04-02")
-    include_dl: bool = Field(default=True)
+    start_date: str = Field(default_factory=recent_start_date_iso)
+    end_date: str = Field(default_factory=recent_end_date_iso)
+    include_dl: bool = Field(default=False)
     include_ensemble: bool = Field(default=True)
 
 
 class ModelBacktestRequest(BaseModel):
     instrument: str = Field(default="AAPL")
-    start_date: str = Field(default="2024-01-01")
-    end_date: str = Field(default="2026-04-02")
+    start_date: str = Field(default_factory=recent_start_date_iso)
+    end_date: str = Field(default_factory=recent_end_date_iso)
     hold_days: int = Field(default=10)
     mode: str = Field(default="ml")
 

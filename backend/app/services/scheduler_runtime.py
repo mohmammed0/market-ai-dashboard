@@ -4,6 +4,7 @@ import logging
 
 from backend.app.config import (
     ALERT_CYCLE_MINUTES,
+    AUTOMATION_DEFAULT_PRESET,
     AUTOMATION_DAILY_SUMMARY_HOUR,
     BREADTH_CYCLE_MINUTES,
     AUTONOMOUS_CYCLE_HOURS,
@@ -12,6 +13,7 @@ from backend.app.config import (
     ENABLE_AUTO_RETRAIN,
     ENABLE_AUTONOMOUS_CYCLE,
     ENABLE_SCHEDULER,
+    FOCUSED_PRODUCT_MODE,
     MARKET_CYCLE_MINUTES,
     NEWS_REFRESH_MINUTES,
     NEWS_REFRESH_PER_SYMBOL_LIMIT,
@@ -264,22 +266,21 @@ def start_scheduler():
     if _scheduler is None:
         _scheduler = BackgroundScheduler(timezone="UTC")
     if not _jobs_registered:
-        _scheduler.add_job(_refresh_history_job, "interval", minutes=30, id="history_refresh", replace_existing=True)
+        history_refresh_minutes = 60 if FOCUSED_PRODUCT_MODE else 30
+        _scheduler.add_job(_refresh_history_job, "interval", minutes=history_refresh_minutes, id="history_refresh", replace_existing=True)
         _scheduler.add_job(_refresh_quotes_job, "interval", minutes=2, id="quote_snapshot", replace_existing=True)
         _scheduler.add_job(_refresh_news_feed_job, "interval", minutes=NEWS_REFRESH_MINUTES, id="news_refresh", replace_existing=True)
-        _scheduler.add_job(lambda: _run_automation_job("market_cycle"), "interval", minutes=MARKET_CYCLE_MINUTES, id="market_cycle", replace_existing=True)
-        _scheduler.add_job(lambda: _run_automation_job("alert_cycle"), "interval", minutes=ALERT_CYCLE_MINUTES, id="alert_cycle", replace_existing=True)
-        _scheduler.add_job(lambda: _run_automation_job("breadth_cycle"), "interval", minutes=BREADTH_CYCLE_MINUTES, id="breadth_cycle", replace_existing=True)
-        _scheduler.add_job(lambda: _run_automation_job("daily_summary"), "cron", hour=AUTOMATION_DAILY_SUMMARY_HOUR, minute=0, id="daily_summary", replace_existing=True)
         _scheduler.add_job(_maintenance_reconcile_job, "interval", seconds=120, id="maintenance_reconcile", replace_existing=True)
-        if ENABLE_AUTO_RETRAIN:
+        if not FOCUSED_PRODUCT_MODE:
+            _scheduler.add_job(lambda: _run_automation_job("market_cycle"), "interval", minutes=MARKET_CYCLE_MINUTES, id="market_cycle", replace_existing=True)
+            _scheduler.add_job(lambda: _run_automation_job("alert_cycle"), "interval", minutes=ALERT_CYCLE_MINUTES, id="alert_cycle", replace_existing=True)
+            _scheduler.add_job(lambda: _run_automation_job("breadth_cycle"), "interval", minutes=BREADTH_CYCLE_MINUTES, id="breadth_cycle", replace_existing=True)
+            _scheduler.add_job(lambda: _run_automation_job("daily_summary"), "cron", hour=AUTOMATION_DAILY_SUMMARY_HOUR, minute=0, id="daily_summary", replace_existing=True)
+        if ENABLE_AUTO_RETRAIN and not FOCUSED_PRODUCT_MODE:
             _scheduler.add_job(lambda: _run_automation_job("retrain_cycle"), "interval", hours=RETRAIN_CYCLE_HOURS, id="retrain_cycle", replace_existing=True)
-        if ENABLE_AUTONOMOUS_CYCLE:
+        if ENABLE_AUTONOMOUS_CYCLE and not FOCUSED_PRODUCT_MODE:
             _scheduler.add_job(lambda: _run_automation_job("autonomous_cycle"), "interval", hours=AUTONOMOUS_CYCLE_HOURS, id="autonomous_cycle", replace_existing=True)
-        # Trailing stop monitor — check every 5 minutes
         _scheduler.add_job(_run_trailing_stop_job, "interval", minutes=5, id="trailing_stop_check", replace_existing=True)
-        # Auto-trading — signal-driven paper trading.
-        # The job always exists; runtime settings decide whether each cycle acts or skips.
         _scheduler.add_job(
             lambda: _run_automation_job("auto_trading_cycle"),
             "interval",
@@ -294,11 +295,11 @@ def start_scheduler():
             id="auto_trading_schedule_sync",
             replace_existing=True,
         )
-        # Smart automation — AI-powered opportunity scanner
-        try:
-            _scheduler.add_job(_run_smart_cycle_job, "interval", minutes=45, id="smart_cycle", replace_existing=True)
-        except Exception:
-            pass
+        if not FOCUSED_PRODUCT_MODE:
+            try:
+                _scheduler.add_job(_run_smart_cycle_job, "interval", minutes=45, id="smart_cycle", replace_existing=True)
+            except Exception:
+                pass
         _jobs_registered = True
     scheduler_started = False
     if not _scheduler.running:
@@ -362,6 +363,7 @@ def get_scheduler_status():
         "scheduler_runner_role": SCHEDULER_RUNNER_ROLE,
         "scheduler_role_allowed": can_current_process_run_scheduler(),
         "server_role": SERVER_ROLE,
+        "focused_product_mode": FOCUSED_PRODUCT_MODE,
         "runtime_state": _scheduler_runtime_state(),
         "blocked": blocked_reason is not None,
         "blocked_reason": blocked_reason,

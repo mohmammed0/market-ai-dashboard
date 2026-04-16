@@ -54,7 +54,7 @@ def get_ranked_analysis_result(
     *,
     ttl_seconds: int = 300,
     include_ml: bool = True,
-    include_dl: bool = True,
+    include_dl: bool = False,
 ) -> dict:
     symbol = str(instrument or "").strip().upper()
     cache_key = f"analysis:ranked:{symbol}:{start_date}:{end_date}:{int(include_ml)}:{int(include_dl)}"
@@ -83,7 +83,7 @@ def get_ranked_analysis_result(
                     dl_output = future.result()
         ranked["ml_output"] = ml_output
         ranked["dl_output"] = dl_output
-        ranked["ensemble_output"] = build_ensemble_output(ranked, ml_output, dl_output) if include_ml or include_dl else None
+        ranked["ensemble_output"] = build_ensemble_output(ranked, ml_output, dl_output) if include_ml else None
         return ranked
 
     return _cache().get_or_set(cache_key, factory, ttl_seconds=ttl_seconds)

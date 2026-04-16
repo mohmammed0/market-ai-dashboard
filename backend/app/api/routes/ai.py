@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from backend.app.schemas import AINewsAnalyzeRequest, AIStatus
 from backend.app.services.ai_news_analyst import analyze_news
 from backend.app.services.llm_gateway import get_llm_status, LLMUnavailableError
-from backend.app.services.news_feed import refresh_news_feed
+from backend.app.services.news_feed import refresh_news_feed, serialize_news_record
 from backend.app.models.market import NewsRecord
 from backend.app.db import get_db
 
@@ -68,28 +68,13 @@ def get_news_feed(
         .all()
     )
 
-    def record_to_dict(r):
-        captured_str = r.captured_at.isoformat() if r.captured_at else None
-        published_str = r.published.isoformat() if isinstance(r.published, datetime) else r.published
-        return {
-            "id": r.id,
-            "instrument": r.instrument,
-            "title": r.title,
-            "source": r.source,
-            "published": published_str,
-            "captured_at": captured_str,
-            "sentiment": r.sentiment,
-            "score": r.score,
-            "url": r.url,
-        }
-
     return {
         "date": str(target_date),
         "time_zone": resolved_time_zone,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "items": [record_to_dict(r) for r in records],
+        "items": [serialize_news_record(r) for r in records],
     }
 
 

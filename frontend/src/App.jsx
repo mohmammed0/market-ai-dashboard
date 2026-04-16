@@ -9,33 +9,13 @@ import AppLayout from "./components/layout/AppLayout";
 // Lazy load pages
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
-const KPIDashboardPage = lazy(() => import("./pages/KPIDashboardPage"));
 const AINewsPage = lazy(() => import("./pages/AINewsPage"));
 const LiveMarketPage = lazy(() => import("./pages/LiveMarketPage"));
 const PaperTradingPage = lazy(() => import("./pages/PaperTradingPage"));
-const BacktestPage = lazy(() => import("./pages/BacktestPage"));
-const StrategyLabPage = lazy(() => import("./pages/StrategyLabPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-// Keep additional pages accessible
-const AnalyzePage = lazy(() => import("./pages/AnalyzePage"));
-const RankingPage = lazy(() => import("./pages/RankingPage"));
-const BreadthPage = lazy(() => import("./pages/BreadthPage"));
-const RiskDashboardPage = lazy(() => import("./pages/RiskDashboardPage"));
-const ModelLabPage = lazy(() => import("./pages/ModelLabPage"));
-const AlertsCenterPage = lazy(() => import("./pages/AlertsCenterPage"));
-const TradeJournalPage = lazy(() => import("./pages/TradeJournalPage"));
-const AutomationPage = lazy(() => import("./pages/AutomationPage"));
 const BrokerPage = lazy(() => import("./pages/BrokerPage"));
-const OperationsPage = lazy(() => import("./pages/OperationsPage"));
-const PortfolioExposurePage = lazy(() => import("./pages/PortfolioExposurePage"));
-
-const BrainDashboardPage = lazy(() => import("./pages/BrainDashboardPage"));
 const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
-const MacroDashboardPage = lazy(() => import("./pages/MacroDashboardPage"));
-const FundamentalsPage = lazy(() => import("./pages/FundamentalsPage"));
-const WatchlistPage = lazy(() => import("./pages/WatchlistPage"));
-const AIChatPage = lazy(() => import("./pages/AIChatPage"));
-const MultiChartPage = lazy(() => import("./pages/MultiChartPage"));
+const RankingPage = lazy(() => import("./pages/RankingPage"));
 
 function PageSkeleton() {
   return (
@@ -99,32 +79,32 @@ export default function App() {
                       <Suspense fallback={<PageSkeleton />}>
                         <Routes>
                           <Route path="/" element={<DashboardPage />} />
-                          <Route path="/kpis" element={<KPIDashboardPage />} />
                           <Route path="/ai-news" element={<AINewsPage />} />
                           <Route path="/live-market" element={<LiveMarketPage />} />
                           <Route path="/paper-trading" element={<PaperTradingPage />} />
-                          <Route path="/backtest" element={<BacktestPage />} />
-                          <Route path="/strategy-lab" element={<StrategyLabPage />} />
                           <Route path="/settings" element={<SettingsPage />} />
-                          <Route path="/analyze" element={<AnalyzePage />} />
+                          <Route path="/analyze" element={<Navigate to="/ai-market" replace />} />
                           <Route path="/ranking" element={<RankingPage />} />
-                          <Route path="/breadth" element={<BreadthPage />} />
-                          <Route path="/risk" element={<RiskDashboardPage />} />
-                          <Route path="/model-lab" element={<ModelLabPage />} />
-                          <Route path="/alerts-center" element={<AlertsCenterPage />} />
-                          <Route path="/trade-journal" element={<TradeJournalPage />} />
-                          <Route path="/automation" element={<AutomationPage />} />
                           <Route path="/broker" element={<BrokerPage />} />
-                          <Route path="/operations" element={<OperationsPage />} />
-                          <Route path="/portfolio-exposure" element={<PortfolioExposurePage />} />
                           <Route path="/scan" element={<Navigate to="/ranking?mode=scan" replace />} />
                           <Route path="/ai-market" element={<AIMarketPage />} />
-                          <Route path="/macro" element={<MacroDashboardPage />} />
-                          <Route path="/fundamentals" element={<FundamentalsPage />} />
-                          <Route path="/watchlist" element={<WatchlistPage />} />
-                          <Route path="/ai-chat" element={<AIChatPage />} />
-                          <Route path="/multi-chart" element={<MultiChartPage />} />
-                          <Route path="/brain" element={<BrainDashboardPage />} />
+                          <Route path="/kpis" element={<Navigate to="/" replace />} />
+                          <Route path="/breadth" element={<Navigate to="/ranking" replace />} />
+                          <Route path="/risk" element={<Navigate to="/broker" replace />} />
+                          <Route path="/backtest" element={<Navigate to="/ranking" replace />} />
+                          <Route path="/strategy-lab" element={<Navigate to="/ranking" replace />} />
+                          <Route path="/model-lab" element={<Navigate to="/settings" replace />} />
+                          <Route path="/alerts-center" element={<Navigate to="/paper-trading" replace />} />
+                          <Route path="/trade-journal" element={<Navigate to="/paper-trading" replace />} />
+                          <Route path="/automation" element={<Navigate to="/settings" replace />} />
+                          <Route path="/operations" element={<Navigate to="/settings" replace />} />
+                          <Route path="/portfolio-exposure" element={<Navigate to="/broker" replace />} />
+                          <Route path="/macro" element={<Navigate to="/ai-market" replace />} />
+                          <Route path="/fundamentals" element={<Navigate to="/ai-market" replace />} />
+                          <Route path="/watchlist" element={<Navigate to="/ranking" replace />} />
+                          <Route path="/ai-chat" element={<Navigate to="/ai-market" replace />} />
+                          <Route path="/multi-chart" element={<Navigate to="/live-market" replace />} />
+                          <Route path="/brain" element={<Navigate to="/settings" replace />} />
                         </Routes>
                       </Suspense>
                     </ErrorBoundary>

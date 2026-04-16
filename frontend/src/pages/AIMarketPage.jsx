@@ -13,6 +13,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SymbolPicker from "../components/ui/SymbolPicker";
 import { fetchFundamentals, fetchMacroCalendar, fetchQuoteSnapshot, fetchSymbolSignal } from "../api/intelligence";
 import useDecisionSurface from "../hooks/useDecisionSurface";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { useWorkspace } from "../lib/useWorkspace";
 
 const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ"];
@@ -187,6 +188,7 @@ function MacroBoard({ macro, loading }) {
 }
 
 export default function AIMarketPage() {
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [searchParams, setSearchParams] = useSearchParams();
   const { workspace, activeWatchlist, favoriteSymbols } = useWorkspace();
   const [symbol, setSymbol] = useState("AAPL");
@@ -199,10 +201,9 @@ export default function AIMarketPage() {
   const [fundamentals, setFundamentals] = useState(null);
   const [macro, setMacro] = useState(null);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
   const { decision, loading: decisionLoading, error: decisionError } = useDecisionSurface({
     symbol,
-    startDate: "2024-01-01",
+    startDate: defaultStartDate,
     endDate: todayIso,
     enabled: Boolean(symbol),
   });

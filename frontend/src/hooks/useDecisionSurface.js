@@ -7,7 +7,7 @@ export default function useDecisionSurface({
   symbol,
   startDate,
   endDate,
-  includeDl = true,
+  includeDl = false,
   includeEnsemble = true,
   enabled = true,
 }) {

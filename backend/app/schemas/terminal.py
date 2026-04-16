@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
+
 
 class MarketTerminalChartRequest(BaseModel):
     symbol: str = Field(default="AAPL")
@@ -10,5 +12,5 @@ class MarketTerminalChartRequest(BaseModel):
 
 class MarketTerminalContextRequest(BaseModel):
     symbol: str = Field(default="AAPL")
-    start_date: str = Field(default="2024-01-01")
-    end_date: str = Field(default="2026-04-02")
+    start_date: str = Field(default_factory=recent_start_date_iso)
+    end_date: str = Field(default_factory=recent_end_date_iso)

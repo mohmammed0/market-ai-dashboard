@@ -29,6 +29,7 @@ from backend.app.config import (
     AUTO_TRADING_ENABLED,
     AUTO_TRADING_QUANTITY,
 )
+from backend.app.core.date_defaults import analysis_window_iso, training_window_iso
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.models import AutomationArtifact, AutomationRun, MarketUniverseSymbol
 from backend.app.services.advanced_alerts import generate_advanced_alerts
@@ -77,11 +78,11 @@ def _utc_today_iso() -> str:
 
 
 def _analysis_window() -> tuple[str, str]:
-    return "2024-01-01", _utc_today_iso()
+    return analysis_window_iso()
 
 
 def _training_window() -> tuple[str, str]:
-    return "2020-01-01", _utc_today_iso()
+    return training_window_iso()
 
 
 def _available_local_symbols() -> set[str]:
@@ -310,7 +311,7 @@ def _market_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_PRESET
         symbols[:8],
         start_date,
         end_date,
-        include_dl=True,
+        include_dl=False,
         include_ensemble=True,
     )
     watchlists = build_dynamic_watchlists(preset=preset)
@@ -872,7 +873,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
                 actionable_candidates: list[dict] = []
                 for index, sym in enumerate(candidate_symbols):
                     try:
-                        preview_result = build_smart_analysis(sym, start_date, end_date, include_dl=True, include_ensemble=True)
+                        preview_result = build_smart_analysis(sym, start_date, end_date, include_dl=False, include_ensemble=True)
                         if "error" in preview_result:
                             preview_candidates.append({"symbol": sym, "error": preview_result.get("error")})
                             continue
@@ -941,7 +942,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
                         signal_snapshot = _build_signal_snapshot(
                             sym,
                             "classic",
-                            item.get("result") or build_smart_analysis(sym, start_date, end_date, include_dl=True, include_ensemble=True),
+                            item.get("result") or build_smart_analysis(sym, start_date, end_date, include_dl=False, include_ensemble=True),
                             start_date,
                             end_date,
                             quote_lookup=quote_lookup,

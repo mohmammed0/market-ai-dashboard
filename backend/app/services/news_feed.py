@@ -9,6 +9,7 @@ from backend.app.config import DEFAULT_SAMPLE_SYMBOLS
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.models.market import NewsRecord
 from backend.app.services.storage import session_scope
+from news_intelligence import classify_news_item, headline_signature
 from news_engine import fetch_news
 
 
@@ -40,7 +41,7 @@ def _item_signature(symbol: str, item: dict) -> tuple:
     url = _as_text(item.get("url") or item.get("link"))
     if url:
         return ("url", instrument, url.lower())
-    title = (_as_text(item.get("title")) or "").lower()
+    title = headline_signature(_as_text(item.get("title")) or "")
     source = (_as_text(item.get("source")) or "").lower()
     published = (_as_text(item.get("published")) or "").lower()
     return ("meta", instrument, title, source, published)
@@ -136,6 +137,15 @@ def refresh_news_feed(symbols: Iterable[str] | None = None, *, per_symbol_limit:
                     "inserted": symbol_inserted,
                     "skipped": symbol_skipped,
                     "overall_sentiment": payload.get("news_sentiment"),
+                    "top_events": [
+                        {
+                            "title": row.get("title"),
+                            "event_type": row.get("event_type"),
+                            "impact_score": row.get("impact_score"),
+                            "sentiment": row.get("sentiment"),
+                        }
+                        for row in items[:3]
+                    ],
                 }
             )
 
@@ -158,4 +168,21 @@ def refresh_news_feed(symbols: Iterable[str] | None = None, *, per_symbol_limit:
         "skipped": skipped,
         "errors": errors,
         "items_by_symbol": per_symbol,
+    }
+
+
+def serialize_news_record(row: NewsRecord) -> dict:
+    metadata = classify_news_item(row.instrument, row.title, row.source)
+    captured_str = row.captured_at.isoformat() if row.captured_at else None
+    return {
+        "id": row.id,
+        "instrument": row.instrument,
+        "title": row.title,
+        "source": row.source,
+        "published": row.published,
+        "captured_at": captured_str,
+        "sentiment": row.sentiment,
+        "score": row.score,
+        "url": row.url,
+        **metadata,
     }

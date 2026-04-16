@@ -4,6 +4,7 @@ import logging
 from datetime import date
 from typing import Any
 
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.core.logging_utils import get_logger
 from backend.app.services import get_cache
 from backend.app.services.cached_analysis import get_ranked_analysis_result
@@ -237,20 +238,21 @@ def _build_strategy_hooks(symbol: str) -> dict:
 
 def build_decision_payload(
     symbol: str,
-    start_date: str = "2024-01-01",
+    start_date: str | None = None,
     end_date: str | None = None,
     *,
-    include_dl: bool = True,
+    include_dl: bool = False,
     include_ensemble: bool = True,
 ) -> dict:
     normalized_symbol = normalize_symbol(symbol or "AAPL")
-    resolved_end_date = end_date or date.today().isoformat()
-    cache_key = f"decision:symbol:{normalized_symbol}:{start_date}:{resolved_end_date}:{int(include_dl)}:{int(include_ensemble)}"
+    resolved_start_date = start_date or recent_start_date_iso()
+    resolved_end_date = end_date or recent_end_date_iso()
+    cache_key = f"decision:symbol:{normalized_symbol}:{resolved_start_date}:{resolved_end_date}:{int(include_dl)}:{int(include_ensemble)}"
 
     def factory() -> dict:
         analysis = get_ranked_analysis_result(
             normalized_symbol,
-            start_date,
+            resolved_start_date,
             resolved_end_date,
             include_ml=True,
             include_dl=include_dl,
@@ -279,7 +281,7 @@ def build_decision_payload(
             try:
                 decision_pkg = _build_decision_package_typed(
                     normalized_symbol,
-                    start_date,
+                    resolved_start_date,
                     resolved_end_date,
                     include_dl=include_dl,
                     include_ensemble=include_ensemble,

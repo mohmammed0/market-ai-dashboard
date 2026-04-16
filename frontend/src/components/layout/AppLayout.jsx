@@ -323,10 +323,9 @@ const NAV_ITEMS = [
 
 const NAV_SECTIONS = [
   { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/paper-trading", "/ai-news"] },
-  { label: "التحليل", paths: ["/ai-chat", "/watchlist", "/ranking", "/breadth", "/multi-chart", "/macro", "/fundamentals"] },
-  { label: "الاستراتيجية", paths: ["/backtest", "/strategy-lab", "/risk", "/portfolio-exposure"] },
-  { label: "التنفيذ", paths: ["/alerts-center", "/trade-journal", "/automation", "/broker"] },
-  { label: "المنصة", paths: ["/operations", "/model-lab", "/brain", "/settings"] },
+  { label: "التحليل", paths: ["/ranking"] },
+  { label: "التنفيذ", paths: ["/broker"] },
+  { label: "المنصة", paths: ["/settings"] },
 ];
 
 function PlatformStatusDots() {

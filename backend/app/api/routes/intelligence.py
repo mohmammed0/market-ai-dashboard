@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from backend.app.api.error_handling import raise_for_error_payload
 from backend.app.api.job_submission import start_training_job_or_raise, submit_background_job_or_raise
 from backend.app.application.model_lifecycle.training_payloads import build_dl_training_payload, build_ml_training_payload
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.application.model_lifecycle.service import (
     get_model_run_details,
     list_model_runs,
@@ -141,16 +142,17 @@ def decision_surface(payload: InferenceRequest):
 def signal_surface(
     symbol: str,
     mode: str = Query(default="ensemble"),
-    start_date: str = Query(default="2024-01-01"),
+    start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
 ):
     resolved_symbol = str(symbol or "").strip().upper()
-    resolved_end_date = end_date or datetime.now(timezone.utc).date().isoformat()
+    resolved_start_date = start_date or recent_start_date_iso()
+    resolved_end_date = end_date or recent_end_date_iso()
     analysis = build_smart_analysis(
         resolved_symbol,
-        start_date,
+        resolved_start_date,
         resolved_end_date,
-        include_dl=True,
+        include_dl=False,
         include_ensemble=True,
     )
     analysis = raise_for_error_payload(analysis, default_status=503)
@@ -163,7 +165,7 @@ def signal_surface(
         score=_confidence_to_score(signal_view.get("confidence")),
         price=signal_view.get("price"),
         reasoning=str(signal_view.get("reasoning") or "").strip() or None,
-        start_date=start_date,
+        start_date=resolved_start_date,
         end_date=resolved_end_date,
     )
 
@@ -195,7 +197,7 @@ def model_aware_backtest(payload: ModelBacktestRequest):
         end_date=payload.end_date,
         hold_days=payload.hold_days,
     )
-    smart = build_smart_analysis(payload.instrument, payload.start_date, payload.end_date, include_dl=True, include_ensemble=True)
+    smart = build_smart_analysis(payload.instrument, payload.start_date, payload.end_date, include_dl=False, include_ensemble=True)
     selected = smart.get("ml_output") if mode == "ml" else smart.get("dl_output") if mode == "dl" else smart.get("ensemble_output")
     return {
         "instrument": payload.instrument,

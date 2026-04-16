@@ -74,7 +74,8 @@ function NewsFeedCard({ item }) {
         <div className="news-card-tags">
           {item?.instrument ? <span className="news-card-symbol">{item.instrument}</span> : null}
           {item?.sentiment ? <StatusBadge label={item.sentiment} tone={sentimentTone(item.sentiment)} /> : null}
-          {item?.score != null ? <span className="news-card-score">Impact {item.score}</span> : null}
+          {item?.event_type ? <span className="news-card-score">{String(item.event_type).replace("_", " ")}</span> : null}
+          {item?.impact_score != null ? <span className="news-card-score">Impact {Number(item.impact_score).toFixed(2)}</span> : null}
         </div>
         {item?.source ? <span className="news-card-source">{item.source}</span> : null}
       </div>
@@ -89,7 +90,9 @@ function NewsFeedCard({ item }) {
       </h3>
       <div className="news-card-footer">
         <span>{formatTime(item?.captured_at || item?.published)}</span>
-        <span>{item?.id ? `#${item.id}` : ""}</span>
+        <span>
+          {item?.relevance_score != null ? `Relevance ${Number(item.relevance_score).toFixed(2)}` : item?.id ? `#${item.id}` : ""}
+        </span>
       </div>
     </article>
   );

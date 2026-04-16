@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from backend.app.config import ROOT_DIR
+from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.models import ModelPrediction, ModelRun
 from backend.app.services.features import FEATURE_COLUMNS, build_feature_frame, create_target_labels
 from backend.app.services.market_data import DEFAULT_SYMBOLS, _load_local_csv, persist_feature_snapshot
@@ -331,7 +332,7 @@ def get_model_run(run_id):
         }
 
 
-def infer_latest(symbol="AAPL", start_date="2024-01-01", end_date="2026-04-02", run_id=None):
+def infer_latest(symbol="AAPL", start_date=None, end_date=None, run_id=None):
     if joblib is None:
         return _dependency_error()
 
@@ -340,7 +341,9 @@ def infer_latest(symbol="AAPL", start_date="2024-01-01", end_date="2026-04-02", 
         return row_data
 
     bundle = joblib.load(row_data["artifact_path"])
-    raw = _load_local_csv(symbol, start_date, end_date)
+    resolved_start_date = start_date or recent_start_date_iso()
+    resolved_end_date = end_date or recent_end_date_iso()
+    raw = _load_local_csv(symbol, resolved_start_date, resolved_end_date)
     if raw.empty:
         return {"error": f"No local history for {symbol}"}
 
