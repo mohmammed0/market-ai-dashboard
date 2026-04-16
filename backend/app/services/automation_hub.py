@@ -869,6 +869,11 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
                         qty = _compute_qty(item["symbol"], budget=budget_per_symbol)
                         if qty > 0:
                             allocated_quantities[item["symbol"].upper()] = qty
+            if not full_portfolio_mode and symbols and not allocated_quantities:
+                for sym in symbols:
+                    qty = _compute_qty(sym, budget=float(notional_per_trade))
+                    if qty > 0:
+                        allocated_quantities[sym.upper()] = qty
             if full_portfolio_mode and symbols and not allocated_quantities:
                 new_entry_symbols = [sym for sym in symbols if sym.upper() not in held_positions] or list(symbols)
                 budget_per_symbol = max(float(notional_per_trade) * 0.995 / len(new_entry_symbols), 0.0)

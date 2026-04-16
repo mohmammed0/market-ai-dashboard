@@ -105,6 +105,13 @@ def _serialize_order(order: Any) -> dict:
     }
 
 
+def _is_open_order_status(status: Any) -> bool:
+    text = (_enum_text(status) or "").upper()
+    if not text:
+        return False
+    return text not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+
+
 class AlpacaBrokerProvider(BrokerProvider):
     provider_name = "alpaca"
 
@@ -551,7 +558,7 @@ class AlpacaBrokerProvider(BrokerProvider):
                 "orders": orders,
                 "totals": {
                     "positions": len(positions),
-                    "open_orders": len(orders),
+                    "open_orders": sum(1 for item in orders if _is_open_order_status(item.get("status"))),
                     "market_value": round(sum(_safe_float(item.get("market_value")) for item in positions), 2),
                     "unrealized_pnl": round(sum(_safe_float(item.get("unrealized_pnl")) for item in positions), 2),
                 },
