@@ -7,6 +7,7 @@ from pathlib import Path
 
 from backend.app.application.execution.service import (
     _build_trade_intents,
+    _submit_to_broker,
     _validate_cash_only_order,
     create_paper_order,
     refresh_signals,
@@ -98,6 +99,18 @@ class ExecutionCashOnlyTests(unittest.TestCase):
             dry_run=False,
             preset="TOP_500_MARKET_CAP",
         )
+
+    def test_submit_to_broker_skips_after_hours_paper_orders(self):
+        with patch("backend.app.services.runtime_settings.get_auto_trading_config", return_value={"ready": True, "alpaca_paper": True}), \
+             patch("backend.app.application.execution.service._is_us_equities_market_open", return_value=False), \
+             patch("backend.app.domain.execution.services.broker_router.route_execution_intent") as route_execution_intent, \
+             patch.dict("os.environ", {"MARKET_AI_PAPER_TRADING_24_7": "1"}, clear=False):
+            result = _submit_to_broker("AAPL", 5, "BUY")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.get("skipped"))
+        self.assertEqual(result.get("reason"), "market_closed_paper_24_7")
+        route_execution_intent.assert_not_called()
 
     def test_sell_signal_without_long_position_does_not_open_short(self):
         signal = SignalSnapshot(

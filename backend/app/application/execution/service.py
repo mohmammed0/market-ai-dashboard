@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 import threading
 import time
 from uuid import uuid4
 import logging
+import os
 
 from backend.app.application.broker.service import get_broker_summary
 from backend.app.core.logging_utils import get_logger, log_event
@@ -46,6 +48,20 @@ from packages.contracts.events.topics import (
 )
 from packages.contracts.enums import ExecutionStatus
 
+def _is_us_equities_market_open() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover
+        from backports.zoneinfo import ZoneInfo
+
+    now_dt = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("America/New_York"))
+    if now_dt.weekday() >= 5:
+        return False
+    market_open = now_dt.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_dt.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now_dt <= market_close
+
+
 # Broker integration for live order submission
 def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market", estimated_price: float | None = None) -> dict | None:
     """Submit order to broker (Alpaca) if configured and enabled."""
@@ -56,6 +72,24 @@ def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "mar
         config = get_auto_trading_config()
         if not config.get("ready", False):
             return None
+        paper_24_7 = str(os.environ.get("MARKET_AI_PAPER_TRADING_24_7", "1")).strip().lower() in {"1", "true", "yes", "on"}
+        if paper_24_7 and bool(config.get("alpaca_paper")) and not _is_us_equities_market_open():
+            log_event(
+                logger,
+                logging.INFO,
+                "execution.broker_submit.skipped_market_closed",
+                symbol=symbol,
+                side=side,
+                qty=qty,
+            )
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "market_closed_paper_24_7",
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+            }
 
         result = route_execution_intent(
             BrokerOrderIntent(
