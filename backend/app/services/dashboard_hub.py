@@ -196,7 +196,7 @@ def _telegram_status_payload() -> dict:
 def get_dashboard_lite() -> DashboardLiteResponse:
     cache = get_cache()
 
-    def build_payload() -> DashboardLiteResponse:
+    def build_payload() -> dict:
         sample_symbols = [symbol for symbol in DEFAULT_SAMPLE_SYMBOLS[:DEFAULT_TRACKED_SYMBOL_LIMIT] if str(symbol).strip()]
         recent_signals_full = safe_service_call(lambda: get_signal_history(limit=max(len(sample_symbols) * 3, 24), compact=False), {"items": []})
         recent_signals_compact = safe_service_call(lambda: get_signal_history(limit=8, compact=True), {"items": []})
@@ -249,9 +249,10 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             auto_trading=safe_service_call(get_auto_trading_config, {"auto_trading_enabled": False, "ready": False}),
             automation={},
             telegram={},
-        )
+        ).model_dump(mode="json")
 
-    return cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=120)
+    cached_payload = cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=120)
+    return DashboardLiteResponse.model_validate(cached_payload)
 
 
 def get_dashboard_market_widget() -> DashboardWidgetResponse:
