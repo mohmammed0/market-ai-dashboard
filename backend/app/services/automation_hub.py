@@ -125,6 +125,38 @@ def _select_symbols_for_cycle(preset: str, universe_symbols: list[str], desired_
     return fallback[:desired_count]
 
 
+def _rotate_symbol_batch(symbols: list[str], desired_count: int) -> tuple[list[str], dict]:
+    desired_count = max(int(desired_count or 0), 1)
+    cleaned = [str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()]
+    if not cleaned:
+        return [], {"offset": 0, "next_offset": 0, "pool_size": 0, "batch_size": desired_count}
+
+    from backend.app.services.runtime_settings import get_runtime_setting_value, set_runtime_setting_value
+
+    pool_size = len(cleaned)
+    try:
+        offset = int(get_runtime_setting_value("auto_trading.rotation_cursor") or 0) % pool_size
+    except Exception:
+        offset = 0
+
+    batch: list[str] = []
+    for index in range(min(desired_count, pool_size)):
+        batch.append(cleaned[(offset + index) % pool_size])
+
+    next_offset = (offset + len(batch)) % pool_size
+    try:
+        set_runtime_setting_value("auto_trading.rotation_cursor", next_offset)
+    except Exception:
+        pass
+
+    return batch, {
+        "offset": offset,
+        "next_offset": next_offset,
+        "pool_size": pool_size,
+        "batch_size": len(batch),
+    }
+
+
 def _record_run(job_name: str, status: str, started_at: datetime, dry_run: bool, detail: str, artifacts: list[dict]) -> dict:
     run_id = f"automation-{job_name}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:6]}"
     completed_at = datetime.utcnow()
@@ -592,7 +624,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     continuously for simulation/learning.
     """
     import os
-    from backend.app.services.runtime_settings import is_auto_trading_enabled, get_auto_trading_config
+    from backend.app.services.runtime_settings import get_auto_trading_config
 
     paper_24_7 = str(os.environ.get("MARKET_AI_PAPER_TRADING_24_7", "1")).strip() in {"1", "true", "True", "yes"}
 
@@ -633,10 +665,20 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         symbol_limit = 10
     symbol_limit = max(1, min(symbol_limit, 500))
     full_portfolio_mode = str(os.environ.get("MARKET_AI_AUTO_TRADING_USE_FULL_PORTFOLIO", "0")).strip().lower() in {"1", "true", "yes", "on"}
-    # Use the curated liquid-symbols list (MARKET_AI_SAMPLE_SYMBOLS in .env) — the
-    # full ALL_US_EQUITIES preset pulls in thinly traded penny stocks with no
-    # reliable Yahoo history, which just produces empty cycles.
+    universe_preset = str(auto_config.get("universe_preset") or preset or AUTOMATION_DEFAULT_PRESET).strip().upper()
+    use_top_market_cap_rotation = universe_preset == "TOP_500_MARKET_CAP"
     symbols = list(DEFAULT_SAMPLE_SYMBOLS)
+    rotation_state = {"offset": 0, "next_offset": 0, "pool_size": len(symbols), "batch_size": 0}
+    ranked_universe_symbols: list[str] = []
+    if use_top_market_cap_rotation:
+        try:
+            top_market_cap = resolve_universe_preset("TOP_500_MARKET_CAP", limit=500)
+            ranked_universe_symbols = list(top_market_cap.get("symbols") or [])
+            rotated_batch, rotation_state = _rotate_symbol_batch(ranked_universe_symbols, symbol_limit)
+            if rotated_batch:
+                symbols = rotated_batch
+        except Exception:
+            ranked_universe_symbols = []
 
     # Rotation: prefer symbols that don't already have an open position so each
     # cycle has a real chance to generate a NEW trade. Reserve one slot for a
@@ -655,17 +697,24 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         held_positions = {}
         held = set()
 
-    unheld = [s for s in symbols if s not in held]
-    held_pool = [s for s in symbols if s in held]
-    _random.shuffle(unheld)
-    _random.shuffle(held_pool)
-    if symbol_limit >= 2 and held_pool and unheld:
-        rotation = unheld[: symbol_limit - 1] + held_pool[:1]
+    if use_top_market_cap_rotation and ranked_universe_symbols:
+        held_pool = [s for s in ranked_universe_symbols if s in held]
+        rotation = [s for s in symbols if s not in held]
+        if held_pool and held_pool[0] not in rotation:
+            rotation = [held_pool[0], *rotation]
+        symbols = list(dict.fromkeys(rotation))[:symbol_limit] or list(DEFAULT_SAMPLE_SYMBOLS)[:symbol_limit]
     else:
-        rotation = (unheld + held_pool)[:symbol_limit]
-    symbols = rotation[:symbol_limit] or list(DEFAULT_SAMPLE_SYMBOLS)[:symbol_limit]
+        unheld = [s for s in symbols if s not in held]
+        held_pool = [s for s in symbols if s in held]
+        _random.shuffle(unheld)
+        _random.shuffle(held_pool)
+        if symbol_limit >= 2 and held_pool and unheld:
+            rotation = unheld[: symbol_limit - 1] + held_pool[:1]
+        else:
+            rotation = (unheld + held_pool)[:symbol_limit]
+        symbols = rotation[:symbol_limit] or list(DEFAULT_SAMPLE_SYMBOLS)[:symbol_limit]
     candidate_symbols = list(symbols)
-    if full_portfolio_mode:
+    if full_portfolio_mode and not use_top_market_cap_rotation:
         mover_limit = max(symbol_limit * 4, 12)
         try:
             local_candidates = []
@@ -699,6 +748,8 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
             candidate_symbols = list(dict.fromkeys(held_pool + mover_symbols))
         except Exception:
             candidate_symbols = list(dict.fromkeys(held_pool + list(DEFAULT_SAMPLE_SYMBOLS)[:mover_limit]))
+    elif use_top_market_cap_rotation:
+        candidate_symbols = list(symbols)
 
     # Run signal refresh with auto-execute.
     # Use a shorter analysis window for auto-trading so each symbol finishes fast
@@ -965,6 +1016,8 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
 
     summary = {
         "generated_at": datetime.utcnow().isoformat(),
+        "universe_preset": universe_preset,
+        "use_top_market_cap_rotation": use_top_market_cap_rotation,
         "symbols_scanned": len(symbols),
         "buy_signals": len(buy_signals),
         "sell_signals": len(sell_signals),
@@ -977,6 +1030,8 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         "portfolio_cash_balance": round(float(portfolio_cash_balance or 0.0), 4),
         "allocated_quantities": allocated_quantities,
         "correlation_id": result.get("correlation_id"),
+        "rotation": rotation_state,
+        "rotation_pool_size": len(ranked_universe_symbols),
         "top_buys": [
             {"symbol": i["symbol"], "confidence": i.get("confidence", 0), "price": i.get("price", 0)}
             for i in sorted(buy_signals, key=lambda x: x.get("confidence", 0), reverse=True)[:5]
@@ -999,7 +1054,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         pass
 
     detail = (
-        f"auto_trading_cycle scanned={len(symbols)} buys={len(buy_signals)} "
+        f"auto_trading_cycle preset={universe_preset} scanned={len(symbols)} buys={len(buy_signals)} "
         f"sells={len(sell_signals)} holds={len(hold_signals)} errors={len(errors)} "
         f"qty={quantity}"
     )
@@ -1007,6 +1062,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     artifacts = [
         {"artifact_type": "auto_trading_summary", "artifact_key": _utc_today_iso(), "payload": summary},
         {"artifact_type": "auto_trading_signals", "artifact_key": "latest", "payload": items},
+        {"artifact_type": "auto_trading_rotation", "artifact_key": universe_preset.lower(), "payload": rotation_state},
     ]
 
     return detail, artifacts

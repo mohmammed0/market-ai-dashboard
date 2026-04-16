@@ -36,6 +36,7 @@ class BrokerProvider:
             "sdk_installed": False,
             "connected": False,
             "mode": self.mode,
+            "trading_mode": guardrails["trading_mode"],
             "paper": True,
             "live_execution_enabled": guardrails["live_execution_enabled"],
             "order_submission_enabled": guardrails["order_submission_enabled"],
@@ -69,6 +70,10 @@ class BrokerProvider:
     def cancel_order(self, order_id: str) -> dict:
         """Cancel an existing order."""
         return {"ok": False, "error": "Broker does not support order cancellation."}
+
+    def liquidate_positions(self, cancel_open_orders: bool = True) -> dict:
+        """Flatten the broker portfolio so the account returns to cash."""
+        return {"ok": False, "error": "Broker does not support portfolio liquidation.", "results": []}
 
     def get_summary(self, refresh: bool = False) -> dict:
         account_payload = self.get_account(refresh=refresh)

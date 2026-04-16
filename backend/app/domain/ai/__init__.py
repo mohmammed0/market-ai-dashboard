@@ -1,0 +1,2 @@
+"""AI domain package scaffold."""
+

@@ -73,6 +73,66 @@ function datetimeToTimestamp(datetime) {
   return isNaN(d.getTime()) ? 0 : Math.floor(d.getTime() / 1000);
 }
 
+function isBusinessDayTime(time) {
+  return Boolean(
+    time &&
+      typeof time === "object" &&
+      Number.isFinite(time.year) &&
+      Number.isFinite(time.month) &&
+      Number.isFinite(time.day),
+  );
+}
+
+function isValidChartTime(time) {
+  if (typeof time === "number") return Number.isFinite(time) && time > 0;
+  if (isBusinessDayTime(time)) return true;
+  return false;
+}
+
+function sortableChartTime(time) {
+  if (typeof time === "number") return time;
+  if (isBusinessDayTime(time)) {
+    return time.year * 10000 + time.month * 100 + time.day;
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+function chartTimeKey(time) {
+  if (typeof time === "number") return `ts:${time}`;
+  if (isBusinessDayTime(time)) return `bd:${time.year}-${time.month}-${time.day}`;
+  return "";
+}
+
+function sanitizeSeriesData(items) {
+  const deduped = new Map();
+  for (const item of items || []) {
+    if (!item || !isValidChartTime(item.time)) continue;
+    deduped.set(chartTimeKey(item.time), item);
+  }
+  return Array.from(deduped.values()).sort((left, right) => sortableChartTime(left.time) - sortableChartTime(right.time));
+}
+
+function sanitizeMarkerData(items) {
+  const deduped = new Map();
+  for (const item of items || []) {
+    if (!item || !isValidChartTime(item.time)) continue;
+    const key = chartTimeKey(item.time);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, item);
+      continue;
+    }
+
+    const existingText = String(existing.text || "").trim();
+    const nextText = String(item.text || "").trim();
+    deduped.set(key, {
+      ...existing,
+      text: [existingText, nextText].filter(Boolean).join(" • ").slice(0, 120),
+    });
+  }
+  return Array.from(deduped.values()).sort((left, right) => sortableChartTime(left.time) - sortableChartTime(right.time));
+}
+
 
 // ---------------------------------------------------------------------------
 // Data transformers — Decision mode (daily, close-only)
@@ -86,7 +146,7 @@ function buildDecisionLineData(dates, values) {
       result.push({ time: dateToBusinessDay(dates[i]), value: Number(val) });
     }
   }
-  return result;
+  return sanitizeSeriesData(result);
 }
 
 
@@ -95,7 +155,8 @@ function buildDecisionLineData(dates, values) {
 // ---------------------------------------------------------------------------
 
 function buildTerminalCandleData(items) {
-  return items
+  return sanitizeSeriesData(
+    items
     .filter((it) => it.datetime && it.close != null)
     .map((it) => ({
       time: datetimeToTimestamp(it.datetime),
@@ -103,20 +164,24 @@ function buildTerminalCandleData(items) {
       high: Number(it.high ?? it.close ?? 0),
       low: Number(it.low ?? it.close ?? 0),
       close: Number(it.close ?? 0),
-    }));
+    })),
+  );
 }
 
 function buildTerminalLineData(items) {
-  return items
+  return sanitizeSeriesData(
+    items
     .filter((it) => it.datetime && (it.close != null || it.price != null))
     .map((it) => ({
       time: datetimeToTimestamp(it.datetime),
       value: Number(it.close ?? it.price ?? 0),
-    }));
+    })),
+  );
 }
 
 function buildTerminalVolumeData(items) {
-  return items
+  return sanitizeSeriesData(
+    items
     .filter((it) => it.datetime && it.volume != null && Number(it.volume) > 0)
     .map((it) => {
       const close = Number(it.close ?? it.price ?? 0);
@@ -126,7 +191,8 @@ function buildTerminalVolumeData(items) {
         value: Number(it.volume),
         color: close >= open ? "rgba(34, 197, 94, 0.4)" : "rgba(249, 115, 22, 0.4)",
       };
-    });
+    }),
+  );
 }
 
 
@@ -148,17 +214,17 @@ function buildCompareSeriesData(compareSeries, mainItems) {
     let data;
     if (items.length && items[0]?.datetime) {
       // Items have their own timestamps
-      data = items
+      data = sanitizeSeriesData(items
         .filter((it) => it.datetime && it.value != null)
-        .map((it) => ({ time: datetimeToTimestamp(it.datetime), value: Number(it.value) }));
+        .map((it) => ({ time: datetimeToTimestamp(it.datetime), value: Number(it.value) })));
     } else {
       // Items are positional — align to main timestamps
-      data = items
+      data = sanitizeSeriesData(items
         .map((it, i) => {
           if (i >= mainTimes.length || it.value == null) return null;
           return { time: mainTimes[i], value: Number(it.value) };
         })
-        .filter(Boolean);
+        .filter(Boolean));
     }
     return { symbol: cs.symbol || `Compare ${idx + 1}`, data, color: COMPARE_COLORS[idx % COMPARE_COLORS.length] };
   }).filter((cs) => cs.data.length > 0);
@@ -532,11 +598,7 @@ export default function TradingChart({
         }
 
         if (chartMarkers.length) {
-          chartMarkers.sort((a, b) => {
-            const tv = (t) => (typeof t === "number" ? t : t.year * 10000 + t.month * 100 + t.day);
-            return tv(a.time) - tv(b.time);
-          });
-          createSeriesMarkers(priceSeries, chartMarkers);
+          createSeriesMarkers(priceSeries, sanitizeMarkerData(chartMarkers));
         }
       }
     }

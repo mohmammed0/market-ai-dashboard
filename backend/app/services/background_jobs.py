@@ -16,9 +16,7 @@ from backend.app.config import (
     ROOT_DIR,
     TRAINING_RUNNER_PYTHON,
 )
-from backend.app.core.logging_utils import get_logger, log_event
-from backend.app.repositories.jobs import BackgroundJobRepository
-from backend.app.services.job_workflows import (
+from backend.app.automation.service import (
     run_automation_workflow,
     run_backtest_workflow,
     run_batch_inference_workflow,
@@ -28,6 +26,8 @@ from backend.app.services.job_workflows import (
     run_strategy_evaluation_workflow,
     run_vectorbt_backtest_workflow,
 )
+from backend.app.core.logging_utils import get_logger, log_event
+from backend.app.repositories.jobs import BackgroundJobRepository
 from backend.app.services.process_guardrails import is_process_running
 from backend.app.services.storage import dumps_json, session_scope
 from core.runtime_paths import BACKGROUND_JOB_LOGS_DIR

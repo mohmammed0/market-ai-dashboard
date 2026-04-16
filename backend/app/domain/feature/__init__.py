@@ -1,0 +1,2 @@
+"""Feature domain package scaffold."""
+

@@ -1,4 +1,4 @@
-import { getJson } from "./client";
+import { getJson, postJson } from "./client";
 
 export async function fetchBrokerStatus() {
   return getJson("/api/broker/status");
@@ -18,4 +18,10 @@ export async function fetchBrokerPositions(refresh = false) {
 
 export async function fetchBrokerOrders(refresh = false) {
   return getJson(`/api/broker/orders${refresh ? "?refresh=true" : ""}`);
+}
+
+export async function liquidateBrokerPortfolio(payload = {}) {
+  return postJson("/api/broker/liquidate", {
+    cancel_open_orders: payload.cancel_open_orders ?? true,
+  });
 }

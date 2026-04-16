@@ -12,6 +12,7 @@ class BrokerStatus(BaseModel):
     sdk_installed: bool = False
     connected: bool = False
     mode: str = "disabled"
+    trading_mode: str = "cash"
     paper: bool = True
     live_execution_enabled: bool = False
     order_submission_enabled: bool = False

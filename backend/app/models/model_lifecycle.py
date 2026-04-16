@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -8,6 +8,10 @@ from backend.app.db.base import Base
 
 class ModelRun(Base):
     __tablename__ = "model_runs"
+    __table_args__ = (
+        Index("ix_model_runs_model_type_started_at", "model_type", "started_at"),
+        Index("ix_model_runs_model_type_is_active", "model_type", "is_active"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -25,6 +29,9 @@ class ModelRun(Base):
 
 class ModelPrediction(Base):
     __tablename__ = "model_predictions"
+    __table_args__ = (
+        Index("ix_model_predictions_symbol_model_type_predicted_at", "symbol", "model_type", "predicted_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
@@ -41,6 +48,10 @@ class ModelPrediction(Base):
 
 class StrategyEvaluationRun(Base):
     __tablename__ = "strategy_evaluation_runs"
+    __table_args__ = (
+        Index("ix_strategy_evaluation_runs_instrument_started_at", "instrument", "started_at"),
+        Index("ix_strategy_evaluation_runs_status_started_at", "status", "started_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -56,6 +67,11 @@ class StrategyEvaluationRun(Base):
 
 class TrainingJob(Base):
     __tablename__ = "training_jobs"
+    __table_args__ = (
+        Index("ix_training_jobs_status_requested_at", "status", "requested_at"),
+        Index("ix_training_jobs_model_type_status_requested_at", "model_type", "status", "requested_at"),
+        Index("ix_training_jobs_worker_status_heartbeat_at", "worker_id", "status", "heartbeat_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     job_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)

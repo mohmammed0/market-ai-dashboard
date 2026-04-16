@@ -313,26 +313,39 @@ class AlpacaBrokerProvider(BrokerProvider):
 
             normalized_side = str(side or "").strip().upper()
             requested_qty = max(_safe_float(qty, 0.0), 0.0)
+            trading_mode = "margin" if str(config.get("trading_mode") or "").strip().lower() == "margin" else "cash"
+            positions = client.get_all_positions()
+            held_qty = 0.0
+            held_side = None
+            for position in positions or []:
+                if (_coerce_text(getattr(position, "symbol", None)) or "").upper() == symbol.upper():
+                    held_qty = _safe_float(getattr(position, "qty", None), 0.0)
+                    held_side = (_coerce_text(getattr(position, "side", None)) or "").split(".")[-1].upper() or None
+                    break
+
             if normalized_side == "BUY":
                 available_cash = _safe_float(getattr(account, "cash", None), 0.0)
+                buying_power = _safe_float(getattr(account, "buying_power", None), available_cash)
                 estimated_notional = requested_qty * estimated_price if estimated_price > 0 else 0.0
-                if estimated_notional > 0 and estimated_notional > available_cash:
+                remaining_open_qty = requested_qty
+                if held_side == "SHORT" and held_qty > 0:
+                    remaining_open_qty = max(requested_qty - held_qty, 0.0)
+                required_open_notional = remaining_open_qty * estimated_price if estimated_price > 0 else 0.0
+                available_capacity = buying_power if trading_mode == "margin" else available_cash
+                if trading_mode != "margin" and held_side == "SHORT" and requested_qty <= held_qty + 1e-9:
+                    required_open_notional = 0.0
+                if required_open_notional > 0 and required_open_notional > available_capacity:
                     return {
                         "ok": False,
                         "error": (
-                            f"Cash-only guard blocked BUY for {symbol.upper()}: "
-                            f"requires about ${estimated_notional:.2f}, cash available ${available_cash:.2f}."
+                            f"{trading_mode.upper()} guard blocked BUY for {symbol.upper()}: "
+                            f"requires about ${required_open_notional:.2f}, "
+                            f"{'buying power' if trading_mode == 'margin' else 'cash'} available ${available_capacity:.2f}."
                         ),
                         "order": None,
                     }
             elif normalized_side == "SELL":
-                positions = client.get_all_positions()
-                held_qty = 0.0
-                for position in positions or []:
-                    if (_coerce_text(getattr(position, "symbol", None)) or "").upper() == symbol.upper():
-                        held_qty = _safe_float(getattr(position, "qty", None), 0.0)
-                        break
-                if requested_qty - held_qty > 1e-9:
+                if trading_mode != "margin" and requested_qty - held_qty > 1e-9:
                     return {
                         "ok": False,
                         "error": (
@@ -402,6 +415,87 @@ class AlpacaBrokerProvider(BrokerProvider):
         except Exception as exc:
             self._log_request_failure("cancel_order", exc)
             return {"ok": False, "error": f"Cancel failed: {self._summarize_exception(exc)}"}
+
+    def liquidate_positions(self, cancel_open_orders: bool = True) -> dict:
+        """Flatten all broker positions so the account returns to cash / no exposure."""
+        client, status = self._client()
+        if client is None:
+            return {"ok": False, "error": status.get("detail", "Cannot connect to Alpaca"), "results": []}
+
+        config = get_alpaca_runtime_config()
+        if not config.get("order_submission_enabled", False):
+            return {"ok": False, "error": "Order submission is disabled in settings.", "results": []}
+
+        canceled_orders = 0
+        liquidation_results: list[dict] = []
+
+        try:
+            if cancel_open_orders:
+                try:
+                    if GetOrdersRequest is not None and QueryOrderStatus is not None:
+                        request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=200, nested=True)
+                        open_orders = client.get_orders(filter=request)
+                    else:
+                        open_orders = client.get_orders()
+                    for order in open_orders or []:
+                        status_text = (_enum_text(getattr(order, "status", None)) or "").upper()
+                        if status_text in {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}:
+                            continue
+                        order_id = _coerce_text(getattr(order, "id", None))
+                        if not order_id:
+                            continue
+                        client.cancel_order_by_id(order_id)
+                        canceled_orders += 1
+                except Exception as exc:
+                    self._log_request_failure("liquidate.cancel_open_orders", exc)
+
+            for position in client.get_all_positions() or []:
+                symbol = _coerce_text(getattr(position, "symbol", None))
+                side = (_coerce_text(getattr(position, "side", None)) or "").split(".")[-1].upper() or "LONG"
+                qty = _safe_float(getattr(position, "qty", None), 0.0)
+                current_price = _safe_float(getattr(position, "current_price", None), 0.0)
+                if not symbol or qty <= 0:
+                    continue
+                liquidation_side = "SELL" if side == "LONG" else "BUY"
+                result = self.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side=liquidation_side,
+                    order_type="market",
+                    estimated_price=current_price,
+                )
+                liquidation_results.append({
+                    "symbol": symbol,
+                    "position_side": side,
+                    "close_side": liquidation_side,
+                    "qty": qty,
+                    "result": result,
+                })
+
+            cache = get_cache()
+            cache.delete("broker:alpaca:orders")
+            cache.delete("broker:alpaca:positions")
+            cache.delete("broker:alpaca:summary")
+            log_event(
+                logger,
+                logging.WARNING,
+                "broker.alpaca.portfolio_liquidated",
+                mode=self._mode(config),
+                canceled_orders=canceled_orders,
+                positions=len(liquidation_results),
+            )
+            return {
+                "ok": True,
+                "error": None,
+                "mode": self._mode(config),
+                "trading_mode": config.get("trading_mode", "cash"),
+                "cancel_open_orders": bool(cancel_open_orders),
+                "canceled_orders": canceled_orders,
+                "results": liquidation_results,
+            }
+        except Exception as exc:
+            self._log_request_failure("liquidate_positions", exc)
+            return {"ok": False, "error": f"Portfolio liquidation failed: {self._summarize_exception(exc)}", "results": liquidation_results}
 
     def get_summary(self, refresh: bool = False) -> dict:
         client, status = self._client()

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Query
 
+from backend.app.automation.service import run_strategy_evaluation_workflow
 from backend.app.api.job_submission import submit_background_job_or_raise
 from backend.app.services.continuous_learning import list_generated_strategy_candidates
 from backend.app.services.experiment_tracker import get_tracking_status, list_experiment_runs
 from backend.app.schemas.requests import StrategyEvaluationRequest
 from backend.app.services.background_jobs import JOB_TYPE_STRATEGY_EVALUATION
-from backend.app.services.job_workflows import run_strategy_evaluation_workflow
 from backend.app.services.strategy_lab import list_strategy_evaluations
 
 

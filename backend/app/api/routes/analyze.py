@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from backend.app.api.error_handling import raise_for_error_payload, to_http_exception
 from backend.app.schemas.requests import AnalyzeRequest
-from backend.app.services.cached_analysis import get_ranked_analysis_result
+from backend.app.strategy.service import get_ranked_analysis_result
 
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])

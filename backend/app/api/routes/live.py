@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 
-from backend.app.services.market_data import fetch_quote_snapshots
+from backend.app.market_data.service import fetch_quote_snapshots
 
 
 router = APIRouter(prefix="/live", tags=["live"])

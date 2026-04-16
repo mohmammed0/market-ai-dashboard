@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Query
 
+from backend.app.automation.service import run_backtest_workflow, run_vectorbt_backtest_workflow
 from backend.app.api.job_submission import submit_background_job_or_raise
 from backend.app.schemas.requests import BacktestRequest
 from backend.app.services.background_jobs import JOB_TYPE_BACKTEST, JOB_TYPE_BACKTEST_VECTORBT
-from backend.app.services.job_workflows import run_backtest_workflow, run_vectorbt_backtest_workflow
 
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])

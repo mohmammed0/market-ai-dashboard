@@ -8,13 +8,15 @@ import ResultCard from "../components/ui/ResultCard";
 import SectionHeader from "../components/ui/SectionHeader";
 import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
-import { fetchBrokerSummary } from "../api/broker";
+import { fetchBrokerSummary, liquidateBrokerPortfolio } from "../api/broker";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { t } from "../lib/i18n";
 
 
 export default function BrokerPage() {
   const [refreshing, setRefreshing] = useState(false);
+  const [liquidating, setLiquidating] = useState(false);
+  const [actionMessage, setActionMessage] = useState("");
   const {
     data: summary,
     loading,
@@ -56,6 +58,7 @@ export default function BrokerPage() {
     : summary?.enabled
       ? "Broker Pending"
       : "Broker Disabled";
+  const liquidationDisabled = !summary?.connected || !summary?.order_submission_enabled || (summary?.positions?.length ?? 0) === 0 || liquidating;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -65,6 +68,23 @@ export default function BrokerPage() {
       // Error state is handled by the shared resource hook.
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function handleLiquidate() {
+    const confirmed = window.confirm("سيتم إغلاق جميع المراكز المفتوحة وتحويل المحفظة إلى وضع مسطّح. هل تريد المتابعة؟");
+    if (!confirmed) return;
+    setLiquidating(true);
+    setActionMessage("");
+    try {
+      const response = await liquidateBrokerPortfolio({ cancel_open_orders: true });
+      const closed = Array.isArray(response?.results) ? response.results.length : 0;
+      setActionMessage(response?.error || `تم إرسال أوامر تصفية لـ ${closed} مركز.`);
+      await reload(true);
+    } catch (actionError) {
+      setActionMessage(actionError.message || "فشل تسييل المحفظة.");
+    } finally {
+      setLiquidating(false);
     }
   }
 
@@ -90,6 +110,7 @@ export default function BrokerPage() {
               items={[
                 { label: "Provider", value: summary.provider || "none" },
                 { label: "Mode", value: summary.mode || "disabled" },
+                { label: "Trading Mode", value: summary.trading_mode === "margin" ? "margin" : "cash" },
                 { label: "Connected", value: summary.connected ? "yes" : "no" },
                 { label: "Order Submission", value: summary.order_submission_enabled ? "enabled" : "disabled", tone: summary.order_submission_enabled ? "warning" : "default" },
                 { label: "Live Execution", value: summary.live_execution_enabled ? "enabled" : "disabled", tone: summary.live_execution_enabled ? "warning" : "default" },
@@ -104,13 +125,18 @@ export default function BrokerPage() {
                 فهما معزولان خلف إعدادات صريحة.
               </span>
               <span>
-                تم ضبط مسار التنفيذ النقدي فقط بحيث يعتمد على <strong>Cash</strong> والأسهم المملوكة فعليًا، وليس على
-                <strong> Buying Power</strong> أو أي فتح مراكز شورت.
+                {summary.trading_mode === "margin"
+                  ? <>نمط التداول الحالي <strong>Margin</strong>، لذلك يسمح بالاقتراض وفتح الشورت ويعتمد على <strong>Buying Power</strong> لدى الوسيط.</>
+                  : <>تم ضبط مسار التنفيذ على <strong>Cash Only</strong> بحيث يعتمد على <strong>Cash</strong> والأسهم المملوكة فعليًا، وليس على <strong>Buying Power</strong> أو أي فتح مراكز شورت.</>}
               </span>
+              {actionMessage ? <span>{actionMessage}</span> : null}
             </div>
             <div className="form-actions">
               <button className="primary-button" type="button" onClick={handleRefresh} disabled={refreshing}>
                 {refreshing ? "جارٍ التحديث..." : "تحديث لقطة الوسيط"}
+              </button>
+              <button className="btn btn-danger btn-sm" type="button" onClick={handleLiquidate} disabled={liquidationDisabled}>
+                {liquidating ? "جارٍ التسييل..." : "تسييل المحفظة"}
               </button>
             </div>
           </>
@@ -126,7 +152,10 @@ export default function BrokerPage() {
             <ResultCard label="Account Status" value={summary.account.status || "-"} />
             <ResultCard label="Cash" value={summary.account.cash ?? 0} />
             <ResultCard label="Equity" value={summary.account.equity ?? 0} />
-            <ResultCard label="Buying Power (informational only)" value={summary.account.buying_power ?? 0} />
+            <ResultCard
+              label={summary?.trading_mode === "margin" ? "Buying Power" : "Buying Power (informational only)"}
+              value={summary.account.buying_power ?? 0}
+            />
             <ResultCard label="Portfolio Value" value={summary.account.portfolio_value ?? 0} />
             <ResultCard label="Pattern Day Trader" value={summary.account.pattern_day_trader ? "Yes" : "No"} />
             <ResultCard label="Trading Blocked" value={summary.account.trading_blocked ? "Yes" : "No"} tone={summary.account.trading_blocked ? "warning" : "default"} />

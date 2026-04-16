@@ -6,8 +6,19 @@ from .broker_state import BrokerAccountSnapshot, BrokerPositionSnapshot
 from .execution import ExecutionAuditEvent, PaperOrder, PaperPosition, PaperTrade, SignalHistory
 from .journal import TradeJournalEntry
 from .jobs import BackgroundJob
-from .market_data import FeatureSnapshot, MarketUniverseSymbol, OhlcvBar, QuoteSnapshot
+from .market_data import CurrencyReference, FeatureSnapshot, MarketUniverseSymbol, OhlcvBar, QuoteSnapshot
 from .model_lifecycle import ModelPrediction, ModelRun, StrategyEvaluationRun, TrainingJob
+from .platform_events import (
+    DeadLetterEvent,
+    EventReplayJob,
+    OrderEvent,
+    OrderIntent,
+    PortfolioSnapshotRecord,
+    ProviderHealth,
+    RiskDecision,
+    SchedulerLease,
+    WorkflowRun,
+)
 from .runtime_settings import RuntimeSetting
 from .workspace import Watchlist, WatchlistItem, WorkspaceState
 
@@ -17,6 +28,7 @@ __all__ = [
     "NewsRecord",
     "OhlcvBar",
     "MarketUniverseSymbol",
+    "CurrencyReference",
     "QuoteSnapshot",
     "FeatureSnapshot",
     "ModelRun",
@@ -31,6 +43,15 @@ __all__ = [
     "BackgroundJob",
     "StrategyEvaluationRun",
     "TrainingJob",
+    "OrderIntent",
+    "RiskDecision",
+    "OrderEvent",
+    "PortfolioSnapshotRecord",
+    "WorkflowRun",
+    "ProviderHealth",
+    "SchedulerLease",
+    "EventReplayJob",
+    "DeadLetterEvent",
     "AutomationRun",
     "AutomationArtifact",
     "ContinuousLearningState",

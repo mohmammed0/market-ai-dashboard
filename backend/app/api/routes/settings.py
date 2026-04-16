@@ -30,6 +30,7 @@ def update_alpaca_settings(payload: AlpacaSettingsUpdateRequest):
             enabled=payload.enabled,
             provider=payload.provider,
             paper=payload.paper,
+            trading_mode=payload.trading_mode,
             api_key=payload.api_key,
             secret_key=payload.secret_key,
             clear_api_key=payload.clear_api_key,

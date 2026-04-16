@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 
-from backend.app.services.breadth_engine import compute_market_breadth, compute_sector_rotation
+from backend.app.features.service import compute_market_breadth, compute_sector_rotation
 
 
 router = APIRouter(prefix="/breadth", tags=["breadth"])

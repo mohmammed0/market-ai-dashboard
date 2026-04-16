@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -8,6 +8,10 @@ from backend.app.db.base import Base
 
 class ContinuousLearningState(Base):
     __tablename__ = "continuous_learning_states"
+    __table_args__ = (
+        Index("ix_cont_learning_state_runtime_status_updated_at", "runtime_status", "updated_at"),
+        Index("ix_cont_learning_state_desired_state_updated_at", "desired_state", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     engine_key: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -34,6 +38,10 @@ class ContinuousLearningState(Base):
 
 class ContinuousLearningRun(Base):
     __tablename__ = "continuous_learning_runs"
+    __table_args__ = (
+        Index("ix_cont_learning_runs_status_started_at", "status", "started_at"),
+        Index("ix_cont_learning_runs_cycle_type_started_at", "cycle_type", "started_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -50,6 +58,9 @@ class ContinuousLearningRun(Base):
 
 class ContinuousLearningArtifact(Base):
     __tablename__ = "continuous_learning_artifacts"
+    __table_args__ = (
+        Index("ix_cont_learning_artifacts_run_id_created_at", "run_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)

@@ -30,3 +30,7 @@ def get_broker_orders(refresh: bool = False) -> dict:
 
 def get_broker_summary(refresh: bool = False) -> dict:
     return get_broker_provider().get_summary(refresh=refresh)
+
+
+def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
+    return get_broker_provider().liquidate_positions(cancel_open_orders=cancel_open_orders)

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from backend.app.application.execution.service import (
+from backend.app.execution.service import (
     confirm_paper_order,
     create_paper_order,
     cancel_paper_order,
@@ -14,6 +14,7 @@ from backend.app.application.execution.service import (
     preview_paper_order,
     refresh_signals,
 )
+from backend.app.readmodels import build_execution_monitor_readmodel
 from backend.app.schemas.requests import PaperSignalRefreshRequest
 from backend.app.services.execution_halt import disable_halt, enable_halt, get_halt_status
 
@@ -49,7 +50,7 @@ class PaperOrderRequest(BaseModel):
 
 @router.get("/portfolio")
 def execution_portfolio():
-    return get_internal_portfolio(limit=500)
+    return build_execution_monitor_readmodel(limit=200)["portfolio"]
 
 
 @router.get("/trades")
@@ -119,6 +120,11 @@ def execution_orders(
     return list_paper_orders(limit=limit, status=status)
 
 
+@router.get("/monitor")
+def execution_monitor(limit: int = Query(default=100, ge=1, le=500)):
+    return build_execution_monitor_readmodel(limit=limit)
+
+
 @router.post("/orders")
 def execution_create_order(payload: PaperOrderRequest):
     return create_paper_order(
@@ -139,6 +145,8 @@ def execution_cancel_order(order_id: int):
         return cancel_paper_order(order_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

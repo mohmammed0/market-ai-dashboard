@@ -1,24 +1,9 @@
 from __future__ import annotations
 
 import sys
-import types
 import unittest
 from unittest.mock import patch
 from pathlib import Path
-
-services_pkg = types.ModuleType("backend.app.services")
-services_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "app" / "services")]
-services_pkg.get_cache = lambda: type(
-    "DummyCache",
-    (),
-    {
-        "get": lambda self, key: None,
-        "set": lambda self, key, value, ttl_seconds=None: value,
-        "get_or_set": lambda self, key, factory, ttl_seconds=None: factory(),
-        "delete": lambda self, key: None,
-    },
-)()
-sys.modules.setdefault("backend.app.services", services_pkg)
 
 from backend.app.application.execution.service import (
     _build_trade_intents,
@@ -78,6 +63,45 @@ class ExecutionCashOnlyTests(unittest.TestCase):
 
         self.assertFalse(allowed)
         self.assertIn("blocks short selling", reason)
+
+    def test_cash_only_validator_allows_covering_short_even_without_cash(self):
+        position = PositionState(
+            symbol="AAPL",
+            strategy_mode="manual",
+            side="SHORT",
+            quantity=3,
+            avg_entry_price=100.0,
+        )
+
+        with patch("backend.app.application.execution.service.get_internal_portfolio", return_value={"summary": {"cash_balance": 0.0}}):
+            allowed, reason = _validate_cash_only_order(
+                side="BUY",
+                symbol="AAPL",
+                quantity=3,
+                estimated_price=110.0,
+                fee_amount=0.0,
+                current_position=position,
+            )
+
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_sell_signal_opens_short_when_margin_enabled(self):
+        signal = SignalSnapshot(
+            symbol="AAPL",
+            strategy_mode="classic",
+            signal="SELL",
+            confidence=92.0,
+            price=180.0,
+            reasoning="trend reversal",
+            analysis_payload={},
+        )
+
+        with patch("backend.app.application.execution.service.get_broker_guardrails", return_value={"trading_mode": "margin"}):
+            intents = _build_trade_intents(None, signal, quantity=1)
+
+        self.assertEqual(len(intents), 1)
+        self.assertEqual(intents[0].intent, "OPEN_SHORT")
 
     def test_create_paper_order_rejects_sell_without_held_shares(self):
         fake_fill = type(

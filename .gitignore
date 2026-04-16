@@ -17,6 +17,7 @@ logs/
 runtime_cache/
 backups/
 tmp_*/
+tmp/
 
 # Local DB / generated data
 *.db
@@ -60,6 +61,7 @@ us_watchlist_source.zip
 # OS / editor
 .DS_Store
 Thumbs.db
+.vs/
 # Extra local-only files
 *.spec
 *.bat
@@ -92,5 +94,9 @@ MarketAIDashboard.spec
 
 .claude/worktrees/
 .env
+.env.production
+.env.production.*
 frontend/test-results/
+frontend/playwright-report/
+.vite/
 *.docx

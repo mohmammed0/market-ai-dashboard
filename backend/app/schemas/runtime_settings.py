@@ -6,6 +6,7 @@ class AlpacaSettingsUpdateRequest(BaseModel):
     enabled: bool = False
     provider: str = Field(default="alpaca", min_length=2, max_length=40)
     paper: bool = True
+    trading_mode: str = Field(default="cash", pattern="^(cash|margin)$")
     api_key: str | None = Field(default=None, max_length=1024)
     secret_key: str | None = Field(default=None, max_length=2048)
     clear_api_key: bool = False

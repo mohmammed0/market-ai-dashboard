@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -8,6 +8,10 @@ from backend.app.db.base import Base
 
 class PaperPosition(Base):
     __tablename__ = "paper_positions"
+    __table_args__ = (
+        Index("ix_paper_positions_symbol_strategy_status", "symbol", "strategy_mode", "status"),
+        Index("ix_paper_positions_status_updated_at", "status", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
@@ -30,6 +34,9 @@ class PaperPosition(Base):
 
 class PaperTrade(Base):
     __tablename__ = "paper_trades"
+    __table_args__ = (
+        Index("ix_paper_trades_symbol_strategy_created_at", "symbol", "strategy_mode", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
@@ -45,6 +52,9 @@ class PaperTrade(Base):
 
 class SignalHistory(Base):
     __tablename__ = "signal_history"
+    __table_args__ = (
+        Index("ix_signal_history_symbol_strategy_created_at", "symbol", "strategy_mode", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
@@ -59,6 +69,10 @@ class SignalHistory(Base):
 
 class PaperOrder(Base):
     __tablename__ = "paper_orders"
+    __table_args__ = (
+        Index("ix_paper_orders_symbol_status_updated_at", "symbol", "status", "updated_at"),
+        Index("ix_paper_orders_status_updated_at", "status", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     client_order_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -76,6 +90,11 @@ class PaperOrder(Base):
 
 class ExecutionAuditEvent(Base):
     __tablename__ = "execution_audit_events"
+    __table_args__ = (
+        Index("ix_execution_audit_events_event_type_created_at", "event_type", "created_at"),
+        Index("ix_execution_audit_events_symbol_created_at", "symbol", "created_at"),
+        Index("ix_execution_audit_events_event_type_correlation_id", "event_type", "correlation_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     event_type: Mapped[str] = mapped_column(String(60), index=True, nullable=False)

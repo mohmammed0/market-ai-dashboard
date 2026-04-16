@@ -19,34 +19,54 @@ from backend.app.domain.execution.contracts import (
     TradeRecord,
 )
 from backend.app.domain.platform.contracts import ExecutionConfirmResult, ExecutionPreview
+from backend.app.domain.execution.services.order_state_machine import transition_execution_status
+from backend.app.events.publisher import publish_event
+from backend.app.observability.metrics import emit_counter
+from backend.app.observability.tracing import build_trace_context
+from backend.app.risk.service import assess_execution_guardrails
 from backend.app.repositories.execution import ExecutionRepository
+from backend.app.repositories.platform_events import PlatformEventRepository
 from backend.app.services.execution_halt import is_halted, get_halt_status
 from backend.app.services.market_data import fetch_quote_snapshots
 from backend.app.services.paper_fill_engine import compute_fill
-from backend.app.services.risk_engine import check_execution_risk
+from backend.app.services.runtime_settings import get_broker_guardrails
 from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
 from backend.app.services.storage import session_scope
+from packages.contracts.events.topics import (
+    EXECUTION_FILL_RECEIVED,
+    EXECUTION_ORDER_ACKNOWLEDGED,
+    EXECUTION_ORDER_CANCELED,
+    EXECUTION_ORDER_INTENT_CREATED,
+    EXECUTION_ORDER_SUBMITTED,
+    PORTFOLIO_SNAPSHOT_UPDATED,
+    RISK_SIGNAL_ACCEPTED,
+    RISK_SIGNAL_REJECTED,
+    STRATEGY_SIGNAL_PROPOSED,
+)
+from packages.contracts.enums import ExecutionStatus
 
 # Broker integration for live order submission
 def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market", estimated_price: float | None = None) -> dict | None:
     """Submit order to broker (Alpaca) if configured and enabled."""
     try:
+        from backend.app.adapters.broker.base import BrokerOrderIntent
+        from backend.app.domain.execution.services.broker_router import route_execution_intent
         from backend.app.services.runtime_settings import get_auto_trading_config
         config = get_auto_trading_config()
         if not config.get("ready", False):
             return None
 
-        from backend.app.services.broker.registry import get_broker_provider
-        broker = get_broker_provider()
-        result = broker.submit_order(
-            symbol=symbol,
-            qty=qty,
-            side=side,
-            order_type=order_type,
-            estimated_price=estimated_price,
+        result = route_execution_intent(
+            BrokerOrderIntent(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                order_type=order_type,
+            ),
+            broker="alpaca",
         )
 
-        if result.get("ok"):
+        if result.get("ok") or result.get("status") not in {None, "error"}:
             # Send Telegram notification
             _notify_trade(symbol, qty, side, result.get("order", {}))
 
@@ -151,6 +171,7 @@ def _build_trade_intents(current_position: PositionState | None, signal_snapshot
     symbol = signal_snapshot.symbol
     strategy_mode = signal_snapshot.strategy_mode
     intents: list[TradeIntent] = []
+    margin_enabled = _is_margin_trading_enabled()
 
     if signal == "BUY":
         if current_position and current_position.side == "SHORT":
@@ -160,7 +181,9 @@ def _build_trade_intents(current_position: PositionState | None, signal_snapshot
     elif signal == "SELL":
         if current_position and current_position.side == "LONG":
             intents.append(TradeIntent(intent="CLOSE_LONG", symbol=symbol, strategy_mode=strategy_mode, side="LONG", quantity=current_position.quantity, execution_price=price, reason="Signal SELL closed long"))
-        else:
+        if margin_enabled and (not current_position or current_position.side != "SHORT"):
+            intents.append(TradeIntent(intent="OPEN_SHORT", symbol=symbol, strategy_mode=strategy_mode, side="SHORT", quantity=quantity, execution_price=price, reason="Signal SELL opened short in margin mode"))
+        elif not current_position or current_position.side != "LONG":
             intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal SELL ignored because no long position is open"))
     else:
         intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal HOLD generated no execution intent"))
@@ -173,6 +196,103 @@ def _get_internal_cash_balance() -> float:
     return max(_safe_float(summary.get("cash_balance"), 0.0), 0.0)
 
 
+def _current_trading_mode() -> str:
+    guardrails = get_broker_guardrails()
+    return "margin" if str(guardrails.get("trading_mode") or "").strip().lower() == "margin" else "cash"
+
+
+def _is_margin_trading_enabled() -> bool:
+    return _current_trading_mode() == "margin"
+
+
+def _derive_order_intent(
+    *,
+    side: str,
+    quantity: float,
+    current_position: PositionState | None = None,
+) -> str:
+    normalized_side = str(side or "").strip().upper()
+    qty = max(_safe_float(quantity, 0.0), 0.0)
+    margin_enabled = _is_margin_trading_enabled()
+
+    if normalized_side == "BUY":
+        if current_position and current_position.side == "SHORT" and qty <= float(current_position.quantity or 0.0) + 1e-9:
+            return "CLOSE_SHORT"
+        return "OPEN_LONG"
+
+    if current_position and current_position.side == "LONG" and qty <= float(current_position.quantity or 0.0) + 1e-9:
+        return "CLOSE_LONG"
+    return "OPEN_SHORT" if margin_enabled else "CLOSE_LONG"
+
+
+def _assess_order_guardrails(
+    *,
+    side: str,
+    symbol: str,
+    quantity: float,
+    estimated_price: float,
+    fee_amount: float = 0.0,
+    current_position: PositionState | None = None,
+) -> dict:
+    normalized_side = str(side or "").strip().upper()
+    available_cash = None
+    if normalized_side == "BUY":
+        available_cash = _get_internal_cash_balance()
+    intent = _derive_order_intent(side=normalized_side, quantity=quantity, current_position=current_position)
+
+    return assess_execution_guardrails(
+        intent=intent,
+        side=side,
+        symbol=symbol,
+        quantity=quantity,
+        price=estimated_price,
+        fee_amount=fee_amount,
+        available_cash=available_cash,
+        current_side=None if current_position is None else current_position.side,
+        current_quantity=None if current_position is None else current_position.quantity,
+        trading_mode=_current_trading_mode(),
+    )
+
+
+def _paper_status_to_execution_state(status: str | None) -> ExecutionStatus:
+    normalized = str(status or "").strip().upper()
+    mapping = {
+        "OPEN": ExecutionStatus.SUBMITTED,
+        "PARTIAL_FILL": ExecutionStatus.PARTIALLY_FILLED,
+        "FILLED": ExecutionStatus.FILLED,
+        "CANCELED": ExecutionStatus.CANCELED,
+        "REJECTED": ExecutionStatus.REJECTED,
+    }
+    return mapping.get(normalized, ExecutionStatus.SUBMITTED)
+
+
+def _execution_state_to_paper_status(state: ExecutionStatus) -> str:
+    mapping = {
+        ExecutionStatus.SUBMITTED: "OPEN",
+        ExecutionStatus.ACKNOWLEDGED: "OPEN",
+        ExecutionStatus.PARTIALLY_FILLED: "PARTIAL_FILL",
+        ExecutionStatus.FILLED: "FILLED",
+        ExecutionStatus.CANCELED: "CANCELED",
+        ExecutionStatus.REJECTED: "REJECTED",
+    }
+    return mapping.get(state, "OPEN")
+
+
+def _build_create_order_state_path(*, order_fills_immediately: bool, is_partial_fill: bool) -> tuple[ExecutionStatus, list[str]]:
+    state = ExecutionStatus.DRAFT
+    path = [state.value]
+    for target in (ExecutionStatus.RISK_PENDING, ExecutionStatus.APPROVED, ExecutionStatus.SUBMITTING, ExecutionStatus.SUBMITTED):
+        state = transition_execution_status(state, target)
+        path.append(state.value)
+    if order_fills_immediately:
+        state = transition_execution_status(state, ExecutionStatus.ACKNOWLEDGED)
+        path.append(state.value)
+        final_target = ExecutionStatus.PARTIALLY_FILLED if is_partial_fill else ExecutionStatus.FILLED
+        state = transition_execution_status(state, final_target)
+        path.append(state.value)
+    return state, path
+
+
 def _validate_cash_only_order(
     *,
     side: str,
@@ -182,33 +302,16 @@ def _validate_cash_only_order(
     fee_amount: float = 0.0,
     current_position: PositionState | None = None,
 ) -> tuple[bool, str | None]:
-    normalized_side = str(side or "").strip().upper()
-    quantity_f = max(_safe_float(quantity, 0.0), 0.0)
-    price_f = max(_safe_float(estimated_price, 0.0), 0.0)
-    fee_f = max(_safe_float(fee_amount, 0.0), 0.0)
-
-    if normalized_side == "BUY":
-        required_cash = round((quantity_f * price_f) + fee_f, 4)
-        available_cash = round(_get_internal_cash_balance(), 4)
-        if required_cash > available_cash:
-            return False, (
-                f"{symbol} buy requires ${required_cash:.2f} cash, but only ${available_cash:.2f} is available. "
-                "Cash-only execution blocks margin usage."
-            )
-        return True, None
-
-    if normalized_side == "SELL":
-        held_quantity = _safe_float(current_position.quantity if current_position else 0.0, 0.0)
-        if current_position is None or str(current_position.side).upper() != "LONG" or held_quantity <= 0:
-            return False, f"{symbol} cannot be sold because no long shares are currently held. Short selling is disabled."
-        if quantity_f - held_quantity > 1e-9:
-            return False, (
-                f"{symbol} sell quantity {quantity_f:.4f} exceeds held long quantity {held_quantity:.4f}. "
-                "Cash-only execution blocks short selling."
-            )
-        return True, None
-
-    return False, f"Unsupported order side: {normalized_side}"
+    decision = _assess_order_guardrails(
+        side=side,
+        symbol=symbol,
+        quantity=quantity,
+        estimated_price=estimated_price,
+        fee_amount=fee_amount,
+        current_position=current_position,
+    )
+    cash_check = decision.get("cash_check") or {}
+    return bool(cash_check.get("allowed", False)), cash_check.get("blocked_reason")
 
 
 def _record_signal_alerts(repo: ExecutionRepository, strategy_mode: str, signal_snapshot: SignalSnapshot, previous_signal: SignalRecord | None) -> None:
@@ -220,18 +323,188 @@ def _record_signal_alerts(repo: ExecutionRepository, strategy_mode: str, signal_
         repo.append_alert(AlertRecord(symbol=signal_snapshot.symbol, strategy_mode=strategy_mode, alert_type="confidence_change", severity="warning", message=f"{signal_snapshot.symbol} confidence changed materially in {strategy_mode}", payload={"previous_confidence": previous_signal.confidence, "current_confidence": signal_snapshot.confidence}))
 
 
+def _build_signal_id(symbol: str, strategy_mode: str, correlation_id: str | None) -> str:
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_mode = str(strategy_mode or "classic").strip().lower()
+    correlation = str(correlation_id or uuid4().hex[:12]).strip()
+    return f"sig-{normalized_symbol}-{normalized_mode}-{correlation}"
+
+
+def _build_order_intent_id(symbol: str, side: str, correlation_id: str | None) -> str:
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_side = str(side or "").strip().upper()
+    correlation = str(correlation_id or uuid4().hex[:12]).strip()
+    return f"oi-{normalized_symbol}-{normalized_side}-{correlation}-{uuid4().hex[:8]}"
+
+
+def _build_internal_portfolio_snapshot_from_repo(repo: ExecutionRepository, limit: int = 500) -> dict:
+    import os
+
+    items = [position.model_dump(mode="json") for position in repo.list_open_positions()[:limit]]
+    all_trades = [row.model_dump(mode="json") for row in repo.list_trades(limit=10000)]
+    long_market_value = round(sum(_safe_float(item.get("market_value")) for item in items if str(item.get("side") or "").upper() == "LONG"), 4)
+    short_market_value = round(sum(_safe_float(item.get("market_value")) for item in items if str(item.get("side") or "").upper() == "SHORT"), 4)
+    total_market_value = round(long_market_value + short_market_value, 4)
+    net_market_value = round(long_market_value - short_market_value, 4)
+    total_unrealized = round(sum(_safe_float(item.get("unrealized_pnl")) for item in items), 4)
+    total_realized = round(sum(_safe_float(item.get("realized_pnl")) for item in items), 4)
+    long_cost = round(
+        sum(_safe_float(item.get("avg_entry_price")) * _safe_float(item.get("quantity")) for item in items if str(item.get("side") or "").upper() == "LONG"),
+        4,
+    )
+    short_proceeds = round(
+        sum(_safe_float(item.get("avg_entry_price")) * _safe_float(item.get("quantity")) for item in items if str(item.get("side") or "").upper() == "SHORT"),
+        4,
+    )
+    starting_cash = _safe_float(os.environ.get("MARKET_AI_PAPER_STARTING_CASH"), default=100_000.0)
+    cash_balance = round(starting_cash + total_realized - long_cost + short_proceeds, 4)
+    total_equity = round(cash_balance + net_market_value, 4)
+    close_trades = [t for t in all_trades if (t.get("action") or "").upper() in {"CLOSE", "CLOSE_LONG", "CLOSE_SHORT", "EXIT"}]
+    wins = sum(1 for t in close_trades if _safe_float(t.get("realized_pnl")) > 0)
+    win_rate = round((wins / len(close_trades) * 100.0), 2) if close_trades else None
+    return {
+        "items": items,
+        "positions": items,
+        "summary": {
+            "open_positions": len(items),
+            "total_market_value": total_market_value,
+            "long_market_value": long_market_value,
+            "short_market_value": short_market_value,
+            "net_market_value": net_market_value,
+            "portfolio_value": total_equity,
+            "starting_cash": starting_cash,
+            "cash_balance": cash_balance,
+            "invested_cost": long_cost,
+            "short_sale_proceeds": short_proceeds,
+            "total_equity": total_equity,
+            "total_unrealized_pnl": total_unrealized,
+            "total_realized_pnl": total_realized,
+            "total_trades": len(all_trades),
+            "win_rate_pct": win_rate if win_rate is not None else "-",
+        },
+    }
+
+
+def _record_risk_decision_event(
+    session,
+    *,
+    signal_id: str | None,
+    symbol: str,
+    intent: str,
+    side: str,
+    decision: str,
+    approved_qty: float | None,
+    reason_codes: list[str] | None,
+    risk_snapshot: dict,
+    correlation_id: str | None,
+) -> None:
+    if hasattr(session, "add"):
+        platform_repo = PlatformEventRepository(session)
+        platform_repo.append_risk_decision(
+            signal_id=signal_id,
+            symbol=symbol,
+            intent=intent,
+            side=side,
+            decision=decision,
+            approved_qty=approved_qty,
+            reason_codes=reason_codes,
+            risk_snapshot=risk_snapshot,
+            correlation_id=correlation_id,
+        )
+    publish_event(
+        event_type=RISK_SIGNAL_ACCEPTED if str(decision).lower() == "accepted" else RISK_SIGNAL_REJECTED,
+        producer="execution_service",
+        payload={
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "intent": intent,
+            "side": side,
+            "decision": decision,
+            "approved_qty": approved_qty,
+            "reason_codes": reason_codes or [],
+            "risk_snapshot": risk_snapshot,
+        },
+        correlation_id=correlation_id,
+    )
+    emit_counter(
+        "risk_decisions_total",
+        decision=str(decision).lower(),
+        intent=intent,
+        symbol=symbol,
+    )
+
+
+def _record_order_event(
+    session,
+    *,
+    order_intent_id: str | None,
+    client_order_id: str | None,
+    symbol: str,
+    event_type: str,
+    correlation_id: str | None,
+    payload: dict,
+) -> None:
+    envelope = publish_event(
+        event_type=event_type,
+        producer="execution_service",
+        payload=payload,
+        correlation_id=correlation_id,
+    )
+    if hasattr(session, "add"):
+        PlatformEventRepository(session).append_order_event(
+            event_id=envelope.event_id,
+            event_type=envelope.event_type,
+            event_version=envelope.event_version,
+            producer=envelope.producer,
+            correlation_id=envelope.correlation_id,
+            payload=envelope.payload,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=symbol,
+        )
+    emit_counter(
+        "execution_order_events_total",
+        event_type=event_type,
+        symbol=symbol,
+    )
+
+
+def _record_portfolio_snapshot_event(repo: ExecutionRepository, *, correlation_id: str | None, snapshot_type: str) -> None:
+    snapshot = _build_internal_portfolio_snapshot_from_repo(repo)
+    if hasattr(repo.session, "add"):
+        PlatformEventRepository(repo.session).append_portfolio_snapshot(
+            snapshot_type=snapshot_type,
+            active_source="internal_paper",
+            correlation_id=correlation_id,
+            summary=snapshot.get("summary") or {},
+            positions=snapshot.get("positions") or [],
+        )
+    publish_event(
+        event_type=PORTFOLIO_SNAPSHOT_UPDATED,
+        producer="execution_service",
+        payload={
+            "snapshot_type": snapshot_type,
+            "active_source": "internal_paper",
+            "summary": snapshot.get("summary") or {},
+            "positions": snapshot.get("positions") or [],
+        },
+        correlation_id=correlation_id,
+    )
+    emit_counter("portfolio_snapshots_total", snapshot_type=snapshot_type, source="internal_paper")
+
+
 def _apply_trade_intent(
     repo: ExecutionRepository,
     current_row,
     intent: TradeIntent,
     correlation_id: str | None = None,
+    signal_id: str | None = None,
 ) -> None:
-    """Apply a single trade intent, pre-checked by the risk gate.
+    """Apply a single trade intent with execution-owned guardrails.
 
-    The risk gate is evaluated here so that every call site — including future
-    callers — automatically gets the protection without needing to remember to
-    call it externally.  CLOSE / NONE intents bypass the gate (closing a
-    position is always safe).
+    Guardrails are evaluated here so that every call site — including future
+    callers — automatically gets deterministic cash-only and risk protection
+    without needing to remember to call another service first.
     """
     if intent.intent == "NONE":
         repo.append_audit_event(ExecutionEventRecord(
@@ -242,35 +515,6 @@ def _apply_trade_intent(
             payload={"intent": intent.intent, "reason": intent.reason},
         ))
         return
-
-    # --- pre-trade risk gate -------------------------------------------------
-    risk = check_execution_risk(
-        intent=intent.intent,
-        symbol=intent.symbol,
-        quantity=intent.quantity,
-        price=intent.execution_price,
-    )
-    if not risk["allowed"]:
-        repo.append_audit_event(ExecutionEventRecord(
-            event_type="risk_gate_blocked",
-            symbol=intent.symbol,
-            strategy_mode=intent.strategy_mode,
-            correlation_id=correlation_id,
-            payload={
-                "intent": intent.intent,
-                "blocked_reason": risk["blocked_reason"],
-                "warnings": risk.get("warnings", []),
-                "price": intent.execution_price,
-                "quantity": intent.quantity,
-            },
-        ))
-        log_event(
-            logger, logging.WARNING, "execution.risk_gate.blocked",
-            symbol=intent.symbol, intent=intent.intent,
-            reason=risk["blocked_reason"], correlation_id=correlation_id,
-        )
-        return
-    # -------------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Paper fill simulation — slippage, spread, fee, partial fill
@@ -289,7 +533,6 @@ def _apply_trade_intent(
     fill_audit = fill.to_audit_dict()
     # ------------------------------------------------------------------
 
-    cash_side = "BUY" if intent.intent in {"OPEN_LONG", "CLOSE_SHORT"} else "SELL"
     current_position = None if current_row is None else PositionState(
         id=current_row.id,
         symbol=current_row.symbol,
@@ -305,39 +548,120 @@ def _apply_trade_intent(
         opened_at=current_row.opened_at,
         updated_at=current_row.updated_at,
     )
-    cash_allowed, cash_block_reason = _validate_cash_only_order(
-        side=cash_side,
+
+    guardrails = assess_execution_guardrails(
+        intent=intent.intent,
+        side=fill_side,
         symbol=intent.symbol,
         quantity=fill_qty if fill_qty > 0 else intent.quantity,
-        estimated_price=fill_price,
+        price=fill_price if fill_price > 0 else intent.execution_price,
         fee_amount=fill.fee_amount,
-        current_position=current_position,
+        available_cash=_get_internal_cash_balance(),
+        current_side=None if current_position is None else current_position.side,
+        current_quantity=None if current_position is None else current_position.quantity,
     )
-    if not cash_allowed:
+    risk_snapshot = {
+        "fill": fill_audit,
+        "guardrails": guardrails,
+        "price": fill_price if fill_price > 0 else intent.execution_price,
+        "quantity": fill_qty if fill_qty > 0 else intent.quantity,
+    }
+    if not guardrails["allowed"]:
+        _record_risk_decision_event(
+            repo.session,
+            signal_id=signal_id,
+            symbol=intent.symbol,
+            intent=intent.intent,
+            side=fill_side,
+            decision="rejected",
+            approved_qty=None,
+            reason_codes=guardrails.get("blocking_reasons", []),
+            risk_snapshot=risk_snapshot,
+            correlation_id=correlation_id,
+        )
         repo.append_audit_event(ExecutionEventRecord(
-            event_type="cash_only_blocked",
+            event_type="execution_guardrails_blocked",
             symbol=intent.symbol,
             strategy_mode=intent.strategy_mode,
             correlation_id=correlation_id,
             payload={
                 "intent": intent.intent,
-                "side": cash_side,
-                "price": fill_price,
+                "blocked_reason": guardrails["blocked_reason"],
+                "blocking_reasons": guardrails.get("blocking_reasons", []),
+                "warnings": guardrails.get("warnings", []),
+                "risk_check": guardrails.get("risk_check"),
+                "cash_check": guardrails.get("cash_check"),
+                "price": fill_price if fill_price > 0 else intent.execution_price,
                 "quantity": fill_qty if fill_qty > 0 else intent.quantity,
-                "reason": cash_block_reason,
+                "fill": fill_audit,
             },
         ))
         log_event(
             logger,
             logging.WARNING,
-            "execution.cash_only.blocked",
+            "execution.guardrails.blocked",
             symbol=intent.symbol,
             intent=intent.intent,
-            side=cash_side,
-            reason=cash_block_reason,
+            reason=guardrails["blocked_reason"],
             correlation_id=correlation_id,
         )
         return
+
+    approved_qty = fill_qty if fill_qty > 0 else intent.quantity
+    order_intent_id = _build_order_intent_id(intent.symbol, fill_side, correlation_id)
+    client_order_id = f"auto-{uuid4().hex[:12]}"
+    platform_repo = PlatformEventRepository(repo.session)
+    _record_risk_decision_event(
+        repo.session,
+        signal_id=signal_id,
+        symbol=intent.symbol,
+        intent=intent.intent,
+        side=fill_side,
+        decision="accepted",
+        approved_qty=approved_qty,
+        reason_codes=[],
+        risk_snapshot=risk_snapshot,
+        correlation_id=correlation_id,
+    )
+    if hasattr(repo.session, "add"):
+        platform_repo.append_order_intent(
+            order_intent_id=order_intent_id,
+            signal_id=signal_id,
+            broker="simulated",
+            symbol=intent.symbol,
+            side=fill_side,
+            qty=approved_qty,
+            order_type="market",
+            time_in_force="day",
+            client_order_id=client_order_id,
+            idempotency_key=f"{correlation_id}:{intent.symbol}:{intent.intent}",
+            status=ExecutionStatus.SUBMITTED.value,
+            correlation_id=correlation_id,
+            payload={
+                "intent": intent.intent,
+                "strategy_mode": intent.strategy_mode,
+                "reason": intent.reason,
+                "fill_preview": fill_audit,
+            },
+        )
+    _record_order_event(
+        repo.session,
+        order_intent_id=order_intent_id,
+        client_order_id=client_order_id,
+        symbol=intent.symbol,
+        event_type=EXECUTION_ORDER_INTENT_CREATED,
+        correlation_id=correlation_id,
+        payload={
+            "order_intent_id": order_intent_id,
+            "signal_id": signal_id,
+            "symbol": intent.symbol,
+            "side": fill_side,
+            "qty": approved_qty,
+            "order_type": "market",
+            "strategy_mode": intent.strategy_mode,
+            "intent": intent.intent,
+        },
+    )
 
     if intent.intent in {"CLOSE_LONG", "CLOSE_SHORT"} and current_row is not None:
         close_qty = fill_qty if fill_qty > 0 else float(current_row.quantity or 0.0)
@@ -355,11 +679,46 @@ def _apply_trade_intent(
         broker_side = "SELL" if intent.intent == "CLOSE_LONG" else "BUY"
         broker_result = _submit_to_broker(intent.symbol, close_qty, broker_side, estimated_price=fill_price)
         broker_info = broker_result if broker_result else {"skipped": True}
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_ORDER_SUBMITTED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": broker_side,
+                "qty": close_qty,
+                "broker": broker_info,
+                "execution_state": ExecutionStatus.SUBMITTED.value,
+            },
+        )
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_FILL_RECEIVED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": broker_side,
+                "fill": fill_audit,
+                "realized_pnl": realized,
+                "broker": broker_info,
+            },
+        )
         repo.append_audit_event(ExecutionEventRecord(
             event_type=intent.intent.lower(), symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
             payload={"price": fill_price, "quantity": close_qty, "realized_pnl": realized, "fill": fill_audit, "broker": broker_info},
         ))
+        _record_portfolio_snapshot_event(repo, correlation_id=correlation_id, snapshot_type="execution_close")
     elif intent.intent == "OPEN_LONG":
         # Set trailing stop on new position
         from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
@@ -381,19 +740,126 @@ def _apply_trade_intent(
         # Submit to Alpaca broker
         broker_result = _submit_to_broker(intent.symbol, fill_qty, "BUY", estimated_price=fill_price)
         broker_info = broker_result if broker_result else {"skipped": True}
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_ORDER_SUBMITTED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": "BUY",
+                "qty": fill_qty,
+                "broker": broker_info,
+                "execution_state": ExecutionStatus.SUBMITTED.value,
+            },
+        )
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_FILL_RECEIVED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": "BUY",
+                "fill": fill_audit,
+                "broker": broker_info,
+            },
+        )
         repo.append_audit_event(ExecutionEventRecord(
             event_type="open_long", symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
             payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
         ))
+        _record_portfolio_snapshot_event(repo, correlation_id=correlation_id, snapshot_type="execution_open")
     elif intent.intent == "OPEN_SHORT":
-        repo.append_audit_event(ExecutionEventRecord(
-            event_type="short_open_blocked",
-            symbol=intent.symbol,
-            strategy_mode=intent.strategy_mode,
-            correlation_id=correlation_id,
-            payload={"reason": "Cash-only execution blocks opening short positions."},
+        if not _is_margin_trading_enabled():
+            _record_risk_decision_event(
+                repo.session,
+                signal_id=signal_id,
+                symbol=intent.symbol,
+                intent=intent.intent,
+                side=fill_side,
+                decision="rejected",
+                approved_qty=None,
+                reason_codes=["short_open_blocked"],
+                risk_snapshot={"reason": "Cash-only execution blocks opening short positions."},
+                correlation_id=correlation_id,
+            )
+            repo.append_audit_event(ExecutionEventRecord(
+                event_type="short_open_blocked",
+                symbol=intent.symbol,
+                strategy_mode=intent.strategy_mode,
+                correlation_id=correlation_id,
+                payload={"reason": "Cash-only execution blocks opening short positions."},
+            ))
+            return
+
+        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
+
+        trailing_pct = DEFAULT_TRAILING_STOP_PCT
+        trailing_stop = round(fill_price * (1 + trailing_pct / 100.0), 4)
+        repo.upsert_position(
+            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
+            side="SHORT", quantity=fill_qty, avg_entry_price=fill_price,
+            current_price=fill_price, market_value=round(fill_price * fill_qty, 4),
+            unrealized_pnl=0.0, realized_pnl=0.0, status="OPEN",
+            trailing_stop_pct=trailing_pct, trailing_stop_price=trailing_stop,
+            high_water_mark=fill_price, stop_loss_price=trailing_stop,
+        )
+        repo.append_trade(TradeRecord(
+            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
+            action="OPEN", side="SHORT", quantity=fill_qty,
+            price=fill_price, realized_pnl=0.0, notes=fill_notes,
         ))
+        broker_result = _submit_to_broker(intent.symbol, fill_qty, "SELL", estimated_price=fill_price)
+        broker_info = broker_result if broker_result else {"skipped": True}
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_ORDER_SUBMITTED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": "SELL",
+                "qty": fill_qty,
+                "broker": broker_info,
+                "execution_state": ExecutionStatus.SUBMITTED.value,
+            },
+        )
+        _record_order_event(
+            repo.session,
+            order_intent_id=order_intent_id,
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            event_type=EXECUTION_FILL_RECEIVED,
+            correlation_id=correlation_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": client_order_id,
+                "symbol": intent.symbol,
+                "side": "SELL",
+                "fill": fill_audit,
+                "broker": broker_info,
+            },
+        )
+        repo.append_audit_event(ExecutionEventRecord(
+            event_type="open_short", symbol=intent.symbol,
+            strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
+            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
+        ))
+        _record_portfolio_snapshot_event(repo, correlation_id=correlation_id, snapshot_type="execution_open_short")
 
 
 def refresh_signals(
@@ -460,10 +926,23 @@ def refresh_signals(
                     continue
 
                 signal_snapshot = _build_signal_snapshot(normalized_symbol, mode, result, start_date, end_date, quote_lookup=quote_lookup)
+                signal_id = _build_signal_id(normalized_symbol, mode, correlation_id)
                 previous_signal = repo.latest_signal(normalized_symbol, mode)
                 repo.append_signal(SignalRecord(symbol=normalized_symbol, strategy_mode=mode, signal=signal_snapshot.signal, confidence=signal_snapshot.confidence, price=signal_snapshot.price, reasoning=signal_snapshot.reasoning, payload=signal_snapshot.analysis_payload))
                 _record_signal_alerts(repo, mode, signal_snapshot, previous_signal)
                 repo.append_audit_event(ExecutionEventRecord(event_type="signal_recorded", symbol=normalized_symbol, strategy_mode=mode, correlation_id=correlation_id, payload=signal_snapshot.model_dump()))
+                publish_event(
+                    event_type=STRATEGY_SIGNAL_PROPOSED,
+                    producer="execution_service",
+                    payload={
+                        "signal_id": signal_id,
+                        "symbol": normalized_symbol,
+                        "strategy_mode": mode,
+                        **signal_snapshot.model_dump(mode="json"),
+                    },
+                    correlation_id=correlation_id,
+                )
+                emit_counter("strategy_signals_total", strategy_mode=mode, signal=signal_snapshot.signal, symbol=normalized_symbol)
 
                 mode_output = result.get(f"{mode}_output") if mode in {"ml", "dl"} else result.get("ensemble_output") if mode == "ensemble" else None
                 if isinstance(mode_output, dict) and mode_output.get("error"):
@@ -475,7 +954,7 @@ def refresh_signals(
                     current_position = None if current_row is None else PositionState(id=current_row.id, symbol=current_row.symbol, strategy_mode=current_row.strategy_mode, side=current_row.side, quantity=current_row.quantity, avg_entry_price=current_row.avg_entry_price, current_price=current_row.current_price, market_value=current_row.market_value or 0.0, unrealized_pnl=current_row.unrealized_pnl or 0.0, realized_pnl=current_row.realized_pnl or 0.0, status=current_row.status, opened_at=current_row.opened_at, updated_at=current_row.updated_at)
                     intents = _build_trade_intents(current_position, signal_snapshot, command.quantity)
                     for intent in intents:
-                        _apply_trade_intent(repo, current_row, intent, correlation_id=correlation_id)
+                        _apply_trade_intent(repo, current_row, intent, correlation_id=correlation_id, signal_id=signal_id)
                         if intent.intent.startswith("CLOSE"):
                             current_row = None
 
@@ -671,6 +1150,8 @@ def create_paper_order(
     normalized_symbol = str(symbol or "").strip().upper()
     normalized_side = str(side or "").strip().upper()
     normalized_order_type = str(order_type or "market").strip().lower()
+    trace_context = build_trace_context(trace_id)
+    trace_id = trace_context["correlation_id"]
     if normalized_side not in {"BUY", "SELL"}:
         raise ValueError("Paper order side must be BUY or SELL.")
     if normalized_order_type not in {"market", "limit"}:
@@ -739,6 +1220,8 @@ def create_paper_order(
         ask=ask_val,
     )
 
+    current_position = None
+    manual_intent = "OPEN_LONG" if normalized_side == "BUY" else "CLOSE_LONG"
     with session_scope() as session:
         repo = ExecutionRepository(session)
         current_row = repo.get_any_open_position_row(normalized_symbol)
@@ -757,7 +1240,12 @@ def create_paper_order(
             opened_at=current_row.opened_at,
             updated_at=current_row.updated_at,
         )
-        cash_allowed, cash_block_reason = _validate_cash_only_order(
+        manual_intent = _derive_order_intent(
+            side=normalized_side,
+            quantity=float(quantity),
+            current_position=current_position,
+        )
+        guardrails = _assess_order_guardrails(
             side=normalized_side,
             symbol=normalized_symbol,
             quantity=float(quantity),
@@ -765,9 +1253,25 @@ def create_paper_order(
             fee_amount=fill.fee_amount,
             current_position=current_position,
         )
-        if not cash_allowed:
+        if not guardrails.get("allowed", False):
+            _record_risk_decision_event(
+                session,
+                signal_id=None,
+                symbol=normalized_symbol,
+                intent=manual_intent,
+                side=normalized_side,
+                decision="rejected",
+                approved_qty=None,
+                reason_codes=guardrails.get("blocking_reasons", []),
+                risk_snapshot={
+                    "guardrails": guardrails,
+                    "fill_preview": fill.to_audit_dict(),
+                    "order_type": normalized_order_type,
+                },
+                correlation_id=trace_id,
+            )
             repo.append_audit_event(ExecutionEventRecord(
-                event_type="paper_order_cash_only_blocked",
+                event_type="paper_order_guardrails_blocked",
                 symbol=normalized_symbol,
                 strategy_mode=strategy_mode,
                 correlation_id=trace_id,
@@ -775,10 +1279,14 @@ def create_paper_order(
                     "side": normalized_side,
                     "quantity": float(quantity),
                     "order_type": normalized_order_type,
-                    "reason": cash_block_reason,
+                    "reason": guardrails.get("blocked_reason"),
+                    "blocking_reasons": guardrails.get("blocking_reasons", []),
+                    "warnings": guardrails.get("warnings", []),
+                    "risk_check": guardrails.get("risk_check"),
+                    "cash_check": guardrails.get("cash_check"),
                 },
             ))
-            raise ValueError(cash_block_reason)
+            raise ValueError(guardrails.get("blocked_reason") or "Execution guardrails blocked the order.")
 
     # Determine whether the order fills immediately.
     if normalized_order_type == "market":
@@ -791,7 +1299,13 @@ def create_paper_order(
     else:
         order_status = "OPEN"
 
-    order_notes_parts = [p for p in [notes, fill.to_notes_str() if order_status != "OPEN" else None] if p]
+    final_execution_state, state_path = _build_create_order_state_path(
+        order_fills_immediately=(order_status != "OPEN"),
+        is_partial_fill=fill.is_partial,
+    )
+    persisted_order_status = _execution_state_to_paper_status(final_execution_state)
+
+    order_notes_parts = [p for p in [notes, fill.to_notes_str() if persisted_order_status != "OPEN" else None] if p]
     order = PaperOrderRecord(
         client_order_id=resolved_client_order_id,
         symbol=normalized_symbol,
@@ -800,12 +1314,117 @@ def create_paper_order(
         order_type=normalized_order_type,
         quantity=float(quantity),
         limit_price=None if limit_price is None else float(limit_price),
-        status=order_status,
+        status=persisted_order_status,
         notes=" | ".join(order_notes_parts) if order_notes_parts else None,
     )
     with session_scope() as session:
         repo = ExecutionRepository(session)
+        platform_repo = PlatformEventRepository(session)
         created = repo.append_order(order)
+        order_intent_id = _build_order_intent_id(normalized_symbol, normalized_side, trace_id)
+        _record_risk_decision_event(
+            session,
+            signal_id=None,
+            symbol=normalized_symbol,
+            intent=manual_intent,
+            side=normalized_side,
+            decision="accepted",
+            approved_qty=float(quantity),
+            reason_codes=[],
+            risk_snapshot={
+                "fill_preview": fill.to_audit_dict(),
+                "order_type": normalized_order_type,
+                "execution_state": final_execution_state.value,
+            },
+            correlation_id=trace_id,
+        )
+        if hasattr(session, "add"):
+            platform_repo.append_order_intent(
+                order_intent_id=order_intent_id,
+                signal_id=None,
+                broker="simulated",
+                symbol=normalized_symbol,
+                side=normalized_side,
+                qty=float(quantity),
+                order_type=normalized_order_type,
+                time_in_force="day",
+                client_order_id=resolved_client_order_id,
+                idempotency_key=f"{trace_id}:{resolved_client_order_id}",
+                status=final_execution_state.value,
+                correlation_id=trace_id,
+                payload={
+                    "limit_price": None if limit_price is None else float(limit_price),
+                    "strategy_mode": strategy_mode,
+                    "notes": notes,
+                    "fill_preview": fill.to_audit_dict(),
+                },
+            )
+        _record_order_event(
+            session,
+            order_intent_id=order_intent_id,
+            client_order_id=resolved_client_order_id,
+            symbol=normalized_symbol,
+            event_type=EXECUTION_ORDER_INTENT_CREATED,
+            correlation_id=trace_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": resolved_client_order_id,
+                "symbol": normalized_symbol,
+                "side": normalized_side,
+                "qty": float(quantity),
+                "order_type": normalized_order_type,
+                "limit_price": None if limit_price is None else float(limit_price),
+                "strategy_mode": strategy_mode,
+            },
+        )
+        _record_order_event(
+            session,
+            order_intent_id=order_intent_id,
+            client_order_id=resolved_client_order_id,
+            symbol=normalized_symbol,
+            event_type=EXECUTION_ORDER_SUBMITTED,
+            correlation_id=trace_id,
+            payload={
+                "order_intent_id": order_intent_id,
+                "client_order_id": resolved_client_order_id,
+                "symbol": normalized_symbol,
+                "side": normalized_side,
+                "qty": float(quantity),
+                "execution_state": final_execution_state.value,
+                "status": persisted_order_status,
+            },
+        )
+        if persisted_order_status != "OPEN":
+            _record_order_event(
+                session,
+                order_intent_id=order_intent_id,
+                client_order_id=resolved_client_order_id,
+                symbol=normalized_symbol,
+                event_type=EXECUTION_ORDER_ACKNOWLEDGED,
+                correlation_id=trace_id,
+                payload={
+                    "order_intent_id": order_intent_id,
+                    "client_order_id": resolved_client_order_id,
+                    "symbol": normalized_symbol,
+                    "execution_state": final_execution_state.value,
+                    "state_path": state_path,
+                },
+            )
+            _record_order_event(
+                session,
+                order_intent_id=order_intent_id,
+                client_order_id=resolved_client_order_id,
+                symbol=normalized_symbol,
+                event_type=EXECUTION_FILL_RECEIVED,
+                correlation_id=trace_id,
+                payload={
+                    "order_intent_id": order_intent_id,
+                    "client_order_id": resolved_client_order_id,
+                    "symbol": normalized_symbol,
+                    "fill": fill.to_audit_dict(),
+                    "status": persisted_order_status,
+                },
+            )
         repo.append_audit_event(ExecutionEventRecord(
             event_type="paper_order_created",
             symbol=normalized_symbol,
@@ -813,10 +1432,18 @@ def create_paper_order(
             correlation_id=trace_id,
             payload={
                 **created.model_dump(mode="json"),
-                "fill": fill.to_audit_dict() if order_status != "OPEN" else None,
+                "fill": fill.to_audit_dict() if persisted_order_status != "OPEN" else None,
+                "execution_state": final_execution_state.value,
+                "state_path": state_path,
                 "trace_id": trace_id,
             },
         ))
+        emit_counter(
+            "paper_orders_created_total",
+            side=normalized_side,
+            order_type=normalized_order_type,
+            status=persisted_order_status,
+        )
     return created.model_dump(mode="json")
 
 
@@ -876,7 +1503,14 @@ def preview_paper_order(
     )
 
     # --- risk gate (read-only probe) -----------------------------------------
-    risk: dict = {"allowed": True, "blocked_reason": None, "warnings": []}
+    guardrails_check: dict = {
+        "allowed": True,
+        "blocked_reason": None,
+        "blocking_reasons": [],
+        "warnings": [],
+        "risk_check": {"allowed": True, "blocked_reason": None, "warnings": []},
+        "cash_check": {"allowed": True, "blocked_reason": None},
+    }
     if not halted:
         try:
             with session_scope() as session:
@@ -897,16 +1531,7 @@ def preview_paper_order(
                     opened_at=current_row.opened_at,
                     updated_at=current_row.updated_at,
                 )
-            risk = check_execution_risk(
-                intent="OPEN_LONG" if normalized_side == "BUY" else "CLOSE_LONG",
-                symbol=normalized_symbol,
-                quantity=float(quantity),
-                price=fill_ref,
-            )
-            if not risk.get("allowed", True):
-                blocking_reasons.append(risk.get("blocked_reason") or "Risk gate blocked.")
-            warnings_list.extend(risk.get("warnings") or [])
-            cash_allowed, cash_block_reason = _validate_cash_only_order(
+            guardrails_check = _assess_order_guardrails(
                 side=normalized_side,
                 symbol=normalized_symbol,
                 quantity=float(quantity),
@@ -914,8 +1539,12 @@ def preview_paper_order(
                 fee_amount=fill.fee_amount,
                 current_position=current_position,
             )
-            if not cash_allowed and cash_block_reason:
-                blocking_reasons.append(cash_block_reason)
+            for reason in guardrails_check.get("blocking_reasons") or []:
+                if reason and reason not in blocking_reasons:
+                    blocking_reasons.append(reason)
+            for warning in guardrails_check.get("warnings") or []:
+                if warning and warning not in warnings_list:
+                    warnings_list.append(warning)
         except Exception as exc:
             warnings_list.append(f"Risk gate check failed: {exc}")
 
@@ -949,7 +1578,7 @@ def preview_paper_order(
         estimated_spread=fill.spread_adj,
         estimated_total_cost=estimated_total_cost,
         halt_status=halt_info,
-        risk_check=risk,
+        risk_check=guardrails_check,
         is_safe_to_execute=is_safe,
         blocking_reasons=blocking_reasons,
         warnings=warnings_list,
@@ -1099,12 +1728,38 @@ def cancel_paper_order(order_id: int) -> dict:
         row = repo.get_order_row(order_id)
         if row is None:
             raise LookupError(f"Paper order not found: {order_id}")
+        current_state = _paper_status_to_execution_state(row.status)
+        pending_cancel_state = transition_execution_status(current_state, ExecutionStatus.CANCEL_PENDING)
+        final_state = transition_execution_status(pending_cancel_state, ExecutionStatus.CANCELED)
         canceled = repo.cancel_order(row, note="Canceled manually")
+        correlation_id = f"paper-cancel-{order_id}"
+        _record_order_event(
+            session,
+            order_intent_id=None,
+            client_order_id=canceled.client_order_id,
+            symbol=canceled.symbol,
+            event_type=EXECUTION_ORDER_CANCELED,
+            correlation_id=correlation_id,
+            payload={
+                "order_id": canceled.id,
+                "client_order_id": canceled.client_order_id,
+                "symbol": canceled.symbol,
+                "status": canceled.status,
+                "execution_state": final_state.value,
+                "state_path": [current_state.value, pending_cancel_state.value, final_state.value],
+                "cancellation": True,
+            },
+        )
         repo.append_audit_event(ExecutionEventRecord(
             event_type="paper_order_canceled",
             symbol=canceled.symbol,
             strategy_mode=canceled.strategy_mode,
-            payload=canceled.model_dump(mode="json"),
+            correlation_id=correlation_id,
+            payload={
+                **canceled.model_dump(mode="json"),
+                "execution_state": final_state.value,
+                "state_path": [current_state.value, pending_cancel_state.value, final_state.value],
+            },
         ))
     return canceled.model_dump(mode="json")
 

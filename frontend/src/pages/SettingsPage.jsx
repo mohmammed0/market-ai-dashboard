@@ -42,7 +42,7 @@ export default function SettingsPage() {
   const [alpacaMsg, setAlpacaMsg] = useState("");
   const [savingAlpaca, setSavingAlpaca] = useState(false);
   const [testingAlpaca, setTestingAlpaca] = useState(false);
-  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false, cycleMinutes: 30 });
+  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, tradingMode: "cash", apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false, cycleMinutes: 30 });
 
   // Telegram state
   const [telegramForm, setTelegramForm] = useState({ botToken: "", chatId: "" });
@@ -59,6 +59,7 @@ export default function SettingsPage() {
     setAlpacaForm({
       enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled),
       paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true),
+      tradingMode: runtimeSettings?.broker?.trading_mode === "margin" ? "margin" : "cash",
       apiKey: "",
       secretKey: "",
       urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "",
@@ -91,6 +92,7 @@ export default function SettingsPage() {
         enabled: alpacaForm.enabled,
         provider: "alpaca",
         paper: alpacaForm.paper,
+        trading_mode: alpacaForm.tradingMode,
         api_key: alpacaForm.apiKey || undefined,
         secret_key: alpacaForm.secretKey || undefined,
         url_override: alpacaForm.urlOverride,
@@ -197,6 +199,7 @@ export default function SettingsPage() {
               <span>Alpaca: {autoTradingInfo.alpaca_configured ? "مفعل" : "غير مفعل"}</span>
               <span>الاوامر: {autoTradingInfo.order_submission_enabled ? "مفعل" : "معطل"}</span>
               <span>الوضع: {autoTradingInfo.alpaca_paper ? "ورقي" : "حقيقي"}</span>
+              <span>النمط: {autoTradingInfo.trading_mode === "margin" ? "مارجن" : "كاش"}</span>
               <span>الدورة: {autoTradingInfo.cycle_minutes || 30} دقيقة</span>
             </div>
           </div>
@@ -276,6 +279,18 @@ export default function SettingsPage() {
               </label>
             </div>
             <div className="settings-row">
+              <span className="settings-row-label">نمط التداول</span>
+              <select
+                className="form-input"
+                style={{ width: "180px" }}
+                value={alpacaForm.tradingMode}
+                onChange={(e) => setAlpacaForm((p) => ({ ...p, tradingMode: e.target.value }))}
+              >
+                <option value="cash">Cash Only</option>
+                <option value="margin">Margin / Short</option>
+              </select>
+            </div>
+            <div className="settings-row">
               <span className="settings-row-label">مفتاح API</span>
               <input className="form-input" style={{ width: "220px" }} type="password" placeholder="PK..." value={alpacaForm.apiKey} onChange={(e) => setAlpacaForm((p) => ({ ...p, apiKey: e.target.value }))} />
             </div>
@@ -316,7 +331,8 @@ export default function SettingsPage() {
             {alpacaForm.autoTrading && (
               <div className="info-banner" style={{ background: "var(--surface-success, #e8f5e9)", borderRadius: 8, padding: "var(--space-2) var(--space-3)" }}>
                 التداول التلقائي مفعل — النظام سيفحص السوق كل {Number(alpacaForm.cycleMinutes || 30)} دقيقة
-                ويبدأ دورة التداول الورقي تلقائيًا على الفرص المكتشفة في البيئة التجريبية.
+                ويبدأ دورة التداول الورقي تلقائيًا على الفرص المكتشفة في البيئة التجريبية. نمط التنفيذ الحالي:{" "}
+                <strong>{alpacaForm.tradingMode === "margin" ? "مارجن / شورت مسموح" : "كاش فقط"}</strong>.
               </div>
             )}
             {alpacaMsg && <div className="info-banner">{alpacaMsg}</div>}

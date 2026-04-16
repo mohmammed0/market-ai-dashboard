@@ -13,6 +13,8 @@ from backend.app.config import (
     ENABLE_AUTONOMOUS_CYCLE,
     ENABLE_SCHEDULER,
     MARKET_CYCLE_MINUTES,
+    NEWS_REFRESH_MINUTES,
+    NEWS_REFRESH_PER_SYMBOL_LIMIT,
     RETRAIN_CYCLE_HOURS,
     SCHEDULER_ROLE_ALLOWED,
     SCHEDULER_RUNNER_ROLE,
@@ -25,6 +27,7 @@ from backend.app.services.background_jobs import reconcile_stale_jobs
 from backend.app.services.continuous_learning import start_continuous_learning
 from backend.app.services.automation_hub import run_automation_job
 from backend.app.services.market_data import DEFAULT_SYMBOLS, fetch_quote_snapshots, incremental_update
+from backend.app.services.news_feed import refresh_news_feed
 from backend.app.services.storage import session_scope
 
 try:
@@ -103,6 +106,21 @@ def _refresh_quotes_job():
         _record_job("quote_snapshot", "completed", detail)
     except Exception as exc:
         _record_job("quote_snapshot", "error", str(exc))
+
+
+def _refresh_news_feed_job():
+    try:
+        result = refresh_news_feed(None, per_symbol_limit=NEWS_REFRESH_PER_SYMBOL_LIMIT)
+        detail = (
+            f"symbols={len(result.get('symbols', []) or [])} "
+            f"fetched={result.get('fetched', 0)} "
+            f"inserted={result.get('inserted', 0)} "
+            f"skipped={result.get('skipped', 0)} "
+            f"errors={len(result.get('errors', []) or [])}"
+        )
+        _record_job("news_refresh", "completed", detail)
+    except Exception as exc:
+        _record_job("news_refresh", "error", str(exc))
 
 
 def _run_automation_job(job_name):
@@ -210,6 +228,7 @@ def start_scheduler():
     if not _jobs_registered:
         _scheduler.add_job(_refresh_history_job, "interval", minutes=30, id="history_refresh", replace_existing=True)
         _scheduler.add_job(_refresh_quotes_job, "interval", minutes=2, id="quote_snapshot", replace_existing=True)
+        _scheduler.add_job(_refresh_news_feed_job, "interval", minutes=NEWS_REFRESH_MINUTES, id="news_refresh", replace_existing=True)
         _scheduler.add_job(lambda: _run_automation_job("market_cycle"), "interval", minutes=MARKET_CYCLE_MINUTES, id="market_cycle", replace_existing=True)
         _scheduler.add_job(lambda: _run_automation_job("alert_cycle"), "interval", minutes=ALERT_CYCLE_MINUTES, id="alert_cycle", replace_existing=True)
         _scheduler.add_job(lambda: _run_automation_job("breadth_cycle"), "interval", minutes=BREADTH_CYCLE_MINUTES, id="breadth_cycle", replace_existing=True)

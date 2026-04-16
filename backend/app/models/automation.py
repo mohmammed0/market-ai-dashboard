@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -8,6 +8,10 @@ from backend.app.db.base import Base
 
 class SchedulerRun(Base):
     __tablename__ = "scheduler_runs"
+    __table_args__ = (
+        Index("ix_scheduler_runs_job_name_ran_at", "job_name", "ran_at"),
+        Index("ix_scheduler_runs_status_ran_at", "status", "ran_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     job_name: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
@@ -18,6 +22,10 @@ class SchedulerRun(Base):
 
 class AutomationRun(Base):
     __tablename__ = "automation_runs"
+    __table_args__ = (
+        Index("ix_automation_runs_job_name_started_at", "job_name", "started_at"),
+        Index("ix_automation_runs_status_started_at", "status", "started_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
@@ -33,6 +41,10 @@ class AutomationRun(Base):
 
 class AutomationArtifact(Base):
     __tablename__ = "automation_artifacts"
+    __table_args__ = (
+        Index("ix_automation_artifacts_run_id_created_at", "run_id", "created_at"),
+        Index("ix_automation_artifacts_job_name_created_at", "job_name", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     run_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)

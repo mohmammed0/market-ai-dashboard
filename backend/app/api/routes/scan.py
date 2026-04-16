@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 from backend.app.api.job_submission import submit_background_job_or_raise
 from backend.app.schemas.requests import ScanRequest
 from backend.app.services.background_jobs import JOB_TYPE_SCAN
-from backend.app.services.job_workflows import run_scan_workflow
+from backend.app.strategy.service import run_scan_workflow
 
 
 router = APIRouter(prefix="/scan", tags=["scan"])

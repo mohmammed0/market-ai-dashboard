@@ -12,7 +12,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy import select
 
 from backend.app.core.logging_utils import get_logger, log_event
-from backend.app.config import ALPACA_ACCOUNT_REFRESH_SECONDS, AUTO_TRADING_CYCLE_MINUTES, DATABASE_URL
+from backend.app.config import ALPACA_ACCOUNT_REFRESH_SECONDS, AUTO_TRADING_CYCLE_MINUTES, AUTO_TRADING_UNIVERSE_PRESET, DATABASE_URL
 from backend.app.models.runtime_settings import RuntimeSetting
 from backend.app.services.cache import get_cache
 from backend.app.services.storage import session_scope
@@ -43,6 +43,11 @@ class SettingSpec:
 
 SETTING_SPECS: dict[str, SettingSpec] = {
     "broker.provider": SettingSpec("broker.provider", "MARKET_AI_BROKER_PROVIDER", "none"),
+    "broker.trading_mode": SettingSpec(
+        "broker.trading_mode",
+        "MARKET_AI_BROKER_TRADING_MODE",
+        "cash",
+    ),
     "broker.order_submission_enabled": SettingSpec(
         "broker.order_submission_enabled",
         "MARKET_AI_BROKER_ORDER_SUBMISSION_ENABLED",
@@ -70,6 +75,17 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         "auto_trading.cycle_minutes",
         "MARKET_AI_AUTO_TRADING_CYCLE_MINUTES",
         AUTO_TRADING_CYCLE_MINUTES,
+        kind="int",
+    ),
+    "auto_trading.universe_preset": SettingSpec(
+        "auto_trading.universe_preset",
+        "MARKET_AI_AUTO_TRADING_UNIVERSE_PRESET",
+        AUTO_TRADING_UNIVERSE_PRESET,
+    ),
+    "auto_trading.rotation_cursor": SettingSpec(
+        "auto_trading.rotation_cursor",
+        "MARKET_AI_AUTO_TRADING_ROTATION_CURSOR",
+        0,
         kind="int",
     ),
 }
@@ -113,6 +129,11 @@ def _coerce_text(value: Any, default: str = "") -> str:
         return str(default)
     text = str(value).strip()
     return text or str(default)
+
+
+def _normalize_trading_mode(value: Any) -> str:
+    normalized = _coerce_text(value, default="cash").lower()
+    return "margin" if normalized == "margin" else "cash"
 
 
 def _normalize_alpaca_url_override(value: Any) -> str:
@@ -283,6 +304,7 @@ def _sdk_installed(package: str) -> bool:
 
 def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, include_secrets: bool = False) -> dict:
     provider, provider_source = _resolve_setting("broker.provider", records)
+    trading_mode, trading_mode_source = _resolve_setting("broker.trading_mode", records)
     order_submission_enabled, order_submission_source = _resolve_setting("broker.order_submission_enabled", records)
     live_execution_enabled, live_execution_source = _resolve_setting("broker.live_execution_enabled", records)
     alpaca_enabled, alpaca_enabled_source = _resolve_setting("alpaca.enabled", records)
@@ -295,6 +317,7 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
     alpaca_sdk_installed = _sdk_installed("alpaca")
     alpaca_configured = bool(alpaca_api_key and alpaca_secret_key)
     provider_name = _coerce_text(provider, default="none").lower()
+    normalized_trading_mode = _normalize_trading_mode(trading_mode)
 
     if provider_name != "alpaca":
         detail = "Broker integration is disabled."
@@ -317,6 +340,9 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
     return {
         "provider": provider_name,
         "provider_source": provider_source,
+        "trading_mode": normalized_trading_mode,
+        "trading_mode_source": trading_mode_source,
+        "margin_enabled": normalized_trading_mode == "margin",
         "order_submission_enabled": bool(order_submission_enabled),
         "order_submission_source": order_submission_source,
         "live_execution_enabled": bool(live_execution_enabled),
@@ -365,6 +391,9 @@ def get_broker_runtime_config() -> dict:
     return {
         "provider": payload["provider"],
         "provider_source": payload["provider_source"],
+        "trading_mode": payload["trading_mode"],
+        "trading_mode_source": payload["trading_mode_source"],
+        "margin_enabled": payload["margin_enabled"],
         "order_submission_enabled": payload["order_submission_enabled"],
         "order_submission_source": payload["order_submission_source"],
         "live_execution_enabled": payload["live_execution_enabled"],
@@ -387,6 +416,8 @@ def get_alpaca_runtime_config() -> dict:
     return {
         **payload["alpaca"],
         "provider": payload["provider"],
+        "trading_mode": payload["trading_mode"],
+        "margin_enabled": payload["margin_enabled"],
         "order_submission_enabled": payload["order_submission_enabled"],
         "live_execution_enabled": payload["live_execution_enabled"],
     }
@@ -395,6 +426,8 @@ def get_alpaca_runtime_config() -> dict:
 def get_broker_guardrails() -> dict:
     payload = get_broker_runtime_config()
     return {
+        "trading_mode": payload["trading_mode"],
+        "margin_enabled": payload["margin_enabled"],
         "order_submission_enabled": payload["order_submission_enabled"],
         "live_execution_enabled": payload["live_execution_enabled"],
     }
@@ -428,11 +461,28 @@ def invalidate_runtime_caches() -> None:
         cache.delete_prefix("broker:alpaca:")
 
 
+def get_runtime_setting_value(key: str) -> Any:
+    if key not in SETTING_SPECS:
+        raise RuntimeSettingsError(f"Unsupported runtime setting: {key}")
+    value, _ = _resolve_setting(key)
+    return value
+
+
+def set_runtime_setting_value(key: str, value: Any) -> Any:
+    spec = SETTING_SPECS.get(key)
+    if spec is None:
+        raise RuntimeSettingsError(f"Unsupported runtime setting: {key}")
+    with session_scope() as session:
+        _upsert_setting(session, key, value, secret=spec.secret, delete_when_blank=(spec.kind == "text"))
+    return get_runtime_setting_value(key)
+
+
 def save_alpaca_runtime_settings(
     *,
     enabled: bool,
     provider: str,
     paper: bool,
+    trading_mode: str | None = None,
     api_key: str | None = None,
     secret_key: str | None = None,
     clear_api_key: bool = False,
@@ -445,9 +495,11 @@ def save_alpaca_runtime_settings(
     clean_provider = _coerce_text(provider, default="alpaca").lower()
     if clean_provider not in {"alpaca", "none"}:
         clean_provider = "alpaca"
+    clean_trading_mode = _normalize_trading_mode(trading_mode)
     clean_url_override = _normalize_alpaca_url_override(url_override)
     with session_scope() as session:
         _upsert_setting(session, "broker.provider", clean_provider)
+        _upsert_setting(session, "broker.trading_mode", clean_trading_mode)
         _upsert_setting(session, "alpaca.enabled", enabled)
         _upsert_setting(session, "alpaca.paper", paper)
         if clear_api_key:
@@ -480,6 +532,7 @@ def save_alpaca_runtime_settings(
         logging.INFO,
         "runtime_settings.alpaca.saved",
         provider=overview.get("provider"),
+        trading_mode=overview.get("trading_mode"),
         enabled=alpaca_overview.get("enabled"),
         paper=alpaca_overview.get("paper"),
         api_key_updated=bool(api_key),
@@ -545,6 +598,7 @@ def get_auto_trading_config() -> dict:
     """Get auto-trading configuration from runtime settings."""
     auto_enabled, auto_source = _resolve_setting("auto_trading.enabled")
     cycle_minutes, cycle_source = _resolve_setting("auto_trading.cycle_minutes")
+    universe_preset, universe_preset_source = _resolve_setting("auto_trading.universe_preset")
     order_sub, order_sub_source = _resolve_setting("broker.order_submission_enabled")
     alpaca_config = get_alpaca_runtime_config()
     return {
@@ -552,6 +606,10 @@ def get_auto_trading_config() -> dict:
         "auto_trading_source": auto_source,
         "cycle_minutes": int(cycle_minutes),
         "cycle_minutes_source": cycle_source,
+        "universe_preset": str(universe_preset or "TOP_500_MARKET_CAP").strip().upper(),
+        "universe_preset_source": universe_preset_source,
+        "trading_mode": alpaca_config.get("trading_mode", "cash"),
+        "margin_enabled": alpaca_config.get("margin_enabled", False),
         "order_submission_enabled": bool(order_sub),
         "alpaca_enabled": alpaca_config.get("enabled", False),
         "alpaca_configured": alpaca_config.get("configured", False),

@@ -1,7 +1,8 @@
 from fastapi import APIRouter
 
+from backend.app.readmodels import build_risk_readmodel
 from backend.app.schemas.requests import RiskPlanRequest
-from backend.app.services.risk_engine import build_trade_risk_plan, get_risk_dashboard
+from backend.app.risk.service import build_trade_risk_plan, get_risk_dashboard
 
 
 router = APIRouter(prefix="/risk", tags=["risk"])
@@ -10,6 +11,11 @@ router = APIRouter(prefix="/risk", tags=["risk"])
 @router.get("/dashboard")
 def risk_dashboard():
     return get_risk_dashboard()
+
+
+@router.get("/readmodel")
+def risk_readmodel():
+    return build_risk_readmodel()
 
 
 @router.post("/plan")

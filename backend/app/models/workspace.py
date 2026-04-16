@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -23,6 +23,7 @@ class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
     __table_args__ = (
         UniqueConstraint("watchlist_id", "symbol", name="uq_watchlist_items_watchlist_symbol"),
+        Index("ix_watchlist_items_watchlist_display_order_symbol", "watchlist_id", "display_order", "symbol"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

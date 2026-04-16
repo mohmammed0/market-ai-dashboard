@@ -1,0 +1,2 @@
+"""Training domain package scaffold."""
+

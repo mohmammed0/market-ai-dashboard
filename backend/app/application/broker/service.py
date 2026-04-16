@@ -11,6 +11,7 @@ from backend.app.services.broker import (
     get_broker_positions as _get_broker_positions,
     get_broker_status as _get_broker_status,
     get_broker_summary as _get_broker_summary,
+    liquidate_broker_positions as _liquidate_broker_positions,
 )
 from backend.app.services.storage import session_scope
 
@@ -25,6 +26,7 @@ def _to_status(payload: dict) -> BrokerStatus:
         "sdk_installed": bool(payload.get("sdk_installed", False)),
         "connected": bool(payload.get("connected", False)),
         "mode": payload.get("mode", "disabled"),
+        "trading_mode": payload.get("trading_mode", "cash"),
         "paper": bool(payload.get("paper", True)),
         "live_execution_enabled": bool(payload.get("live_execution_enabled", False)),
         "order_submission_enabled": bool(payload.get("order_submission_enabled", False)),
@@ -91,3 +93,7 @@ def get_broker_orders(refresh: bool = False) -> dict:
     payload = get_broker_summary(refresh=refresh)
     status_keys = {key: payload.get(key) for key in payload if key not in {"account", "positions", "orders", "totals"}}
     return {**status_keys, "items": payload.get("orders", []), "count": len(payload.get("orders", []))}
+
+
+def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
+    return _liquidate_broker_positions(cancel_open_orders=cancel_open_orders)

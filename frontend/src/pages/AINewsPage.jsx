@@ -8,7 +8,7 @@ import MetricCard from "../components/ui/MetricCard";
 import PageFrame from "../components/ui/PageFrame";
 import SectionCard from "../components/ui/SectionCard";
 import StatusBadge from "../components/ui/StatusBadge";
-import { fetchAiStatus, getNewsFeed } from "../api/ai";
+import { fetchAiStatus, getNewsFeed, refreshNewsFeed } from "../api/ai";
 
 function toDateStr(date) {
   const y = date.getFullYear();
@@ -103,6 +103,14 @@ export default function AINewsPage() {
   const [aiStatus, setAiStatus] = useState(null);
   const [searchParams] = useSearchParams();
   const refreshTimerRef = useRef(null);
+  const sourceRefreshTimestampRef = useRef(0);
+  const clientTimeZone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  }, []);
 
   const symbolFilter = searchParams.get("symbol") || "";
 
@@ -112,12 +120,21 @@ export default function AINewsPage() {
 
   useEffect(() => {
     let active = true;
+    sourceRefreshTimestampRef.current = 0;
 
     async function loadFeed() {
       setFeedLoading(true);
       setFeedError("");
       try {
-        const payload = await getNewsFeed(toDateStr(selectedDate), 50, 0, symbolFilter || null);
+        const shouldRefreshSource =
+          isToday(selectedDate) &&
+          (sourceRefreshTimestampRef.current === 0 || (Date.now() - sourceRefreshTimestampRef.current) >= 5 * 60 * 1000);
+
+        if (shouldRefreshSource) {
+          await refreshNewsFeed(symbolFilter ? [symbolFilter] : null, 5);
+          sourceRefreshTimestampRef.current = Date.now();
+        }
+        const payload = await getNewsFeed(toDateStr(selectedDate), 50, 0, symbolFilter || null, clientTimeZone);
         if (active) {
           setFeedData(payload);
         }
@@ -138,6 +155,8 @@ export default function AINewsPage() {
     }
     if (isToday(selectedDate)) {
       refreshTimerRef.current = setInterval(() => loadFeed().catch(() => {}), 60_000);
+    } else {
+      sourceRefreshTimestampRef.current = 0;
     }
 
     return () => {
@@ -146,7 +165,7 @@ export default function AINewsPage() {
         clearInterval(refreshTimerRef.current);
       }
     };
-  }, [selectedDate, symbolFilter]);
+  }, [selectedDate, symbolFilter, clientTimeZone]);
 
   const items = useMemo(() => Array.isArray(feedData?.items) ? feedData.items : [], [feedData]);
   const positiveCount = items.filter((item) => sentimentTone(item.sentiment) === "positive").length;

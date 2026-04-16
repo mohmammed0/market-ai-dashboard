@@ -5,12 +5,18 @@ from sqlalchemy.orm import sessionmaker
 from backend.app.config import (
     DATABASE_APPLICATION_NAME,
     DATABASE_CONNECT_TIMEOUT_SECONDS,
+    DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS,
     DATABASE_IS_POSTGRESQL,
     DATABASE_IS_SQLITE,
+    DATABASE_LOCK_TIMEOUT_MS,
     DATABASE_MAX_OVERFLOW,
+    DATABASE_POOL_TIMEOUT_SECONDS,
     DATABASE_POOL_RECYCLE_SECONDS,
     DATABASE_POOL_SIZE,
+    DATABASE_STATEMENT_TIMEOUT_MS,
     DATABASE_URL,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_CACHE_SIZE_KB,
 )
 from core.runtime_paths import ensure_database_parent, ensure_runtime_directories
 
@@ -27,12 +33,19 @@ if DATABASE_IS_SQLITE:
     _engine_kwargs["poolclass"] = NullPool
 elif DATABASE_IS_POSTGRESQL:
     _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_use_lifo"] = True
     _engine_kwargs["pool_size"] = DATABASE_POOL_SIZE
     _engine_kwargs["max_overflow"] = DATABASE_MAX_OVERFLOW
+    _engine_kwargs["pool_timeout"] = DATABASE_POOL_TIMEOUT_SECONDS
     _engine_kwargs["pool_recycle"] = DATABASE_POOL_RECYCLE_SECONDS
     _engine_kwargs["connect_args"] = {
         "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
         "application_name": DATABASE_APPLICATION_NAME,
+        "options": (
+            f"-c statement_timeout={DATABASE_STATEMENT_TIMEOUT_MS} "
+            f"-c lock_timeout={DATABASE_LOCK_TIMEOUT_MS} "
+            f"-c idle_in_transaction_session_timeout={DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS}"
+        ),
     }
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
@@ -46,8 +59,10 @@ if DATABASE_IS_SQLITE:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
-        cursor.execute("PRAGMA cache_size=-20000")  # 20MB cache
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute(f"PRAGMA cache_size=-{SQLITE_CACHE_SIZE_KB}")  # negative => kibibytes
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA temp_store=MEMORY")
         cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
