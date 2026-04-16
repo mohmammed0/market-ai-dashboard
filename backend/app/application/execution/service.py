@@ -1136,51 +1136,106 @@ def refresh_signals(
 
 
 def get_internal_portfolio(limit: int = 500) -> dict:
-    import os
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        items = [position.model_dump(mode="json") for position in repo.list_open_positions()[:limit]]
-        all_trades = [row.model_dump(mode="json") for row in repo.list_trades(limit=10000)]
+        return _build_internal_portfolio_snapshot_from_repo(repo, limit=limit)
 
-    total_market_value = round(sum(_safe_float(item.get("market_value")) for item in items), 4)
-    total_unrealized = round(sum(_safe_float(item.get("unrealized_pnl")) for item in items), 4)
-    total_realized = round(sum(_safe_float(item.get("realized_pnl")) for item in items), 4)
-    invested_cost = round(
-        sum(_safe_float(item.get("avg_entry_price")) * _safe_float(item.get("quantity")) for item in items),
-        4,
+
+def sync_internal_positions_from_broker(strategy_mode: str = "classic") -> dict:
+    from backend.app.services.broker.registry import get_broker_provider
+
+    normalized_mode = str(strategy_mode or "classic").strip().lower() or "classic"
+    provider = get_broker_provider()
+    positions_payload = provider.get_positions(refresh=True)
+    broker_positions = list(positions_payload.get("items") or [])
+
+    broker_symbols: set[str] = set()
+    synced_symbols: list[str] = []
+    short_symbols: list[str] = []
+    closed_symbols: list[str] = []
+
+    with session_scope() as session:
+        repo = ExecutionRepository(session)
+        existing_rows = list(repo.list_open_position_rows())
+
+        for item in broker_positions:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            side = str(item.get("side") or "").strip().upper()
+            quantity = abs(_safe_float(item.get("qty"), 0.0))
+            if not symbol or side not in {"LONG", "SHORT"} or quantity <= 0:
+                continue
+            broker_symbols.add(symbol)
+
+        for row in existing_rows:
+            row_symbol = str(row.symbol or "").strip().upper()
+            if row.strategy_mode != normalized_mode or row_symbol not in broker_symbols:
+                repo.close_position(
+                    row,
+                    current_price=_safe_float(row.current_price, row.avg_entry_price),
+                    realized_pnl=0.0,
+                )
+                closed_symbols.append(row_symbol)
+
+        for item in broker_positions:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            side = str(item.get("side") or "").strip().upper()
+            quantity = abs(_safe_float(item.get("qty"), 0.0))
+            avg_entry_price = _safe_float(item.get("avg_entry_price"), 0.0)
+            current_price = _safe_float(item.get("current_price"), avg_entry_price)
+            if not symbol or side not in {"LONG", "SHORT"} or quantity <= 0:
+                continue
+            market_value = abs(_safe_float(item.get("market_value"), current_price * quantity))
+            unrealized_pnl = _safe_float(item.get("unrealized_pnl"), 0.0)
+            realized_pnl = _safe_float(item.get("realized_pnl"), 0.0)
+            repo.upsert_position(
+                symbol=symbol,
+                strategy_mode=normalized_mode,
+                side=side,
+                quantity=quantity,
+                avg_entry_price=avg_entry_price,
+                current_price=current_price,
+                market_value=market_value,
+                unrealized_pnl=unrealized_pnl,
+                realized_pnl=realized_pnl,
+                status="OPEN",
+            )
+            synced_symbols.append(symbol)
+            if side == "SHORT":
+                short_symbols.append(symbol)
+
+        repo.append_audit_event(
+            ExecutionEventRecord(
+                event_type="broker_positions_synced",
+                source="broker_sync",
+                portfolio_source="broker_alpaca",
+                strategy_mode=normalized_mode,
+                payload={
+                    "broker_provider": positions_payload.get("provider"),
+                    "synced_symbols": synced_symbols,
+                    "short_symbols": short_symbols,
+                    "closed_symbols": closed_symbols,
+                    "count": len(synced_symbols),
+                },
+            )
+        )
+
+    log_event(
+        logger,
+        logging.INFO,
+        "execution.broker_positions_synced",
+        strategy_mode=normalized_mode,
+        positions=len(synced_symbols),
+        short_positions=len(short_symbols),
+        closed_positions=len(closed_symbols),
     )
-
-    # Paper-trading wallet model (no broker required):
-    #   starting_cash configurable via MARKET_AI_PAPER_STARTING_CASH (default $100,000)
-    #   cash    = starting_cash + realized_pnl - invested_cost
-    #   equity  = cash + total_market_value
-    starting_cash = _safe_float(os.environ.get("MARKET_AI_PAPER_STARTING_CASH"), default=100_000.0)
-    cash_balance = round(starting_cash + total_realized - invested_cost, 4)
-    total_equity = round(cash_balance + total_market_value, 4)
-
-    # Close/exit trades (CLOSE action) to compute win rate
-    close_trades = [t for t in all_trades if (t.get("action") or "").upper() in {"CLOSE", "CLOSE_LONG", "CLOSE_SHORT", "EXIT"}]
-    wins = sum(1 for t in close_trades if _safe_float(t.get("realized_pnl")) > 0)
-    total_trades_count = len(all_trades)
-    win_rate = round((wins / len(close_trades) * 100.0), 2) if close_trades else None
-
-    summary = {
-        "open_positions": len(items),
-        "total_market_value": total_market_value,
-        "portfolio_value": total_equity,  # frontend "Portfolio Value" should be EQUITY (cash + positions)
-        "starting_cash": starting_cash,
-        "cash_balance": cash_balance,
-        "invested_cost": invested_cost,
-        "total_equity": total_equity,
-        "total_unrealized_pnl": total_unrealized,
-        "total_realized_pnl": total_realized,
-        "total_trades": total_trades_count,
-        "win_rate_pct": win_rate if win_rate is not None else "-",
-    }
     return {
-        "items": items,
-        "positions": items,  # alias expected by frontend
-        "summary": summary,
+        "ok": True,
+        "strategy_mode": normalized_mode,
+        "positions": len(synced_symbols),
+        "short_positions": len(short_symbols),
+        "short_symbols": short_symbols,
+        "closed_positions": len(closed_symbols),
+        "closed_symbols": closed_symbols,
     }
 
 

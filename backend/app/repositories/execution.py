@@ -104,13 +104,16 @@ class ExecutionRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def list_open_positions(self) -> list[PositionState]:
-        rows = (
+    def list_open_position_rows(self) -> list[PaperPosition]:
+        return (
             self.session.query(PaperPosition)
             .filter(PaperPosition.status == "OPEN")
             .order_by(PaperPosition.updated_at.desc())
             .all()
         )
+
+    def list_open_positions(self) -> list[PositionState]:
+        rows = self.list_open_position_rows()
         return [_serialize_position(row) for row in rows]
 
     def get_open_position_row(self, symbol: str, strategy_mode: str) -> PaperPosition | None:

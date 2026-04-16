@@ -10,9 +10,12 @@ from backend.app.application.execution.service import (
     _submit_to_broker,
     _validate_cash_only_order,
     create_paper_order,
+    get_internal_portfolio,
     refresh_signals,
+    sync_internal_positions_from_broker,
 )
 from backend.app.domain.execution.contracts import PositionState, SignalSnapshot
+from backend.app.services.automation_hub import _auto_trading_cycle
 from backend.app.services import scheduler_runtime
 
 
@@ -111,6 +114,133 @@ class ExecutionCashOnlyTests(unittest.TestCase):
         self.assertTrue(result.get("skipped"))
         self.assertEqual(result.get("reason"), "market_closed_paper_24_7")
         route_execution_intent.assert_not_called()
+
+    def test_get_internal_portfolio_handles_short_positions(self):
+        long_position = PositionState(
+            symbol="AAPL",
+            strategy_mode="classic",
+            side="LONG",
+            quantity=10,
+            avg_entry_price=100.0,
+            current_price=110.0,
+            market_value=1100.0,
+            unrealized_pnl=100.0,
+            realized_pnl=0.0,
+        )
+        short_position = PositionState(
+            symbol="MSFT",
+            strategy_mode="classic",
+            side="SHORT",
+            quantity=5,
+            avg_entry_price=200.0,
+            current_price=190.0,
+            market_value=950.0,
+            unrealized_pnl=50.0,
+            realized_pnl=0.0,
+        )
+
+        repo = type(
+            "Repo",
+            (),
+            {
+                "list_open_positions": lambda self: [long_position, short_position],
+                "list_trades": lambda self, limit=10000: [],
+            },
+        )()
+
+        with patch("backend.app.application.execution.service.ExecutionRepository", return_value=repo), \
+             patch("backend.app.application.execution.service.session_scope") as session_scope, \
+             patch.dict("os.environ", {"MARKET_AI_PAPER_STARTING_CASH": "100000"}, clear=False):
+            session_scope.return_value.__enter__.return_value = object()
+            payload = get_internal_portfolio(limit=500)
+
+        summary = payload["summary"]
+        self.assertEqual(summary["open_positions"], 2)
+        self.assertEqual(summary["long_market_value"], 1100.0)
+        self.assertEqual(summary["short_market_value"], 950.0)
+        self.assertEqual(summary["net_market_value"], 150.0)
+        self.assertEqual(summary["short_sale_proceeds"], 1000.0)
+        self.assertEqual(summary["cash_balance"], 100000.0)
+        self.assertEqual(summary["portfolio_value"], 100150.0)
+
+    def test_sync_internal_positions_from_broker_updates_repo_and_reports_shorts(self):
+        existing_classic = type(
+            "Row",
+            (),
+            {"symbol": "AAPL", "strategy_mode": "classic", "current_price": 100.0, "avg_entry_price": 95.0},
+        )()
+        existing_manual = type(
+            "Row",
+            (),
+            {"symbol": "TSLA", "strategy_mode": "manual", "current_price": 200.0, "avg_entry_price": 190.0},
+        )()
+        closed_rows: list[str] = []
+        upserts: list[tuple[str, str, float]] = []
+        audits: list[str] = []
+
+        class _Repo:
+            def list_open_position_rows(self):
+                return [existing_classic, existing_manual]
+
+            def close_position(self, row, *, current_price, realized_pnl):
+                closed_rows.append(f"{row.symbol}:{row.strategy_mode}")
+                return None
+
+            def upsert_position(self, **kwargs):
+                upserts.append((kwargs["symbol"], kwargs["side"], kwargs["quantity"]))
+                return None
+
+            def append_audit_event(self, event):
+                audits.append(event.event_type)
+                return None
+
+        provider = type(
+            "Provider",
+            (),
+            {
+                "get_positions": lambda self, refresh=False: {
+                    "provider": "alpaca",
+                    "items": [
+                        {"symbol": "AAPL", "side": "LONG", "qty": 10.0, "avg_entry_price": 100.0, "current_price": 110.0, "market_value": 1100.0, "unrealized_pnl": 100.0, "realized_pnl": 0.0},
+                        {"symbol": "MSFT", "side": "SHORT", "qty": -3.0, "avg_entry_price": 200.0, "current_price": 195.0, "market_value": -585.0, "unrealized_pnl": 15.0, "realized_pnl": 0.0},
+                    ],
+                }
+            },
+        )()
+
+        with patch("backend.app.services.broker.registry.get_broker_provider", return_value=provider), \
+             patch("backend.app.application.execution.service.ExecutionRepository", return_value=_Repo()), \
+             patch("backend.app.application.execution.service.session_scope") as session_scope:
+            session_scope.return_value.__enter__.return_value = object()
+            result = sync_internal_positions_from_broker(strategy_mode="classic")
+
+        self.assertEqual(result["positions"], 2)
+        self.assertEqual(result["short_positions"], 1)
+        self.assertEqual(result["short_symbols"], ["MSFT"])
+        self.assertIn("TSLA:manual", closed_rows)
+        self.assertEqual(upserts, [("AAPL", "LONG", 10.0), ("MSFT", "SHORT", 3.0)])
+        self.assertIn("broker_positions_synced", audits)
+
+    def test_auto_trading_cycle_skips_when_cash_mode_broker_has_short_positions(self):
+        with patch("backend.app.services.runtime_settings.get_auto_trading_config", return_value={
+            "auto_trading_enabled": True,
+            "order_submission_enabled": True,
+            "alpaca_configured": True,
+            "trading_mode": "cash",
+            "ready": True,
+        }), \
+             patch("backend.app.application.execution.service.sync_internal_positions_from_broker", return_value={
+                 "ok": True,
+                 "positions": 3,
+                 "short_positions": 1,
+                 "short_symbols": ["MSFT"],
+             }), \
+             patch.dict("os.environ", {"MARKET_AI_PAPER_TRADING_24_7": "0"}, clear=False):
+            detail, artifacts = _auto_trading_cycle()
+
+        self.assertIn("short positions", detail)
+        self.assertEqual(artifacts[0]["artifact_key"], "cash_mode_short_positions")
+        self.assertEqual(artifacts[0]["payload"]["broker_sync"]["short_symbols"], ["MSFT"])
 
     def test_sell_signal_without_long_position_does_not_open_short(self):
         signal = SignalSnapshot(

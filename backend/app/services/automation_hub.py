@@ -642,10 +642,47 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
             [{"artifact_type": "auto_trading_status", "artifact_key": "skipped", "payload": {**auto_config, "paper_24_7": paper_24_7}}],
         )
 
+    broker_sync_result = None
+    if not paper_24_7 and auto_config.get("order_submission_enabled") and auto_config.get("alpaca_configured"):
+        try:
+            from backend.app.application.execution.service import sync_internal_positions_from_broker
+
+            broker_sync_result = sync_internal_positions_from_broker(strategy_mode="classic")
+            if str(auto_config.get("trading_mode") or "cash").strip().lower() == "cash" and int(broker_sync_result.get("short_positions") or 0) > 0:
+                return (
+                    "auto_trading_cycle skipped: broker account has short positions while cash mode is active",
+                    [
+                        {
+                            "artifact_type": "auto_trading_status",
+                            "artifact_key": "cash_mode_short_positions",
+                            "payload": {
+                                **auto_config,
+                                "paper_24_7": paper_24_7,
+                                "broker_sync": broker_sync_result,
+                            },
+                        }
+                    ],
+                )
+        except Exception as exc:
+            return (
+                f"auto_trading_cycle skipped: broker sync failed ({exc})",
+                [
+                    {
+                        "artifact_type": "auto_trading_status",
+                        "artifact_key": "broker_sync_failed",
+                        "payload": {
+                            **auto_config,
+                            "paper_24_7": paper_24_7,
+                            "error": str(exc),
+                        },
+                    }
+                ],
+            )
+
     if dry_run:
         return (
             "auto_trading_cycle dry_run=True",
-            [{"artifact_type": "auto_trading_status", "artifact_key": "dry_run", "payload": {"dry_run": True, **auto_config}}],
+            [{"artifact_type": "auto_trading_status", "artifact_key": "dry_run", "payload": {"dry_run": True, **auto_config, "broker_sync": broker_sync_result}}],
         )
 
     # Market-hours check: bypass when paper_24_7 is enabled (pure internal simulation).
@@ -653,7 +690,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
     if not market_open:
         return (
             "auto_trading_cycle skipped: market is closed",
-            [{"artifact_type": "auto_trading_status", "artifact_key": "market_closed", "payload": {"market_open": False}}],
+            [{"artifact_type": "auto_trading_status", "artifact_key": "market_closed", "payload": {"market_open": False, "broker_sync": broker_sync_result}}],
         )
 
     # Cap symbols per cycle so the schedule doesn't overlap with itself.
@@ -1017,6 +1054,7 @@ def _auto_trading_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_
         "generated_at": datetime.utcnow().isoformat(),
         "universe_preset": universe_preset,
         "use_top_market_cap_rotation": use_top_market_cap_rotation,
+        "broker_sync": broker_sync_result,
         "symbols_scanned": len(symbols),
         "buy_signals": len(buy_signals),
         "sell_signals": len(sell_signals),
