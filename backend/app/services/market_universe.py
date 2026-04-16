@@ -59,6 +59,7 @@ TOP_PERFORMER_SYMBOLS = [
 
 UNIVERSE_PRESET_LABELS = {
     "CUSTOM": "Custom Symbols",
+    "FOCUSED_SAMPLE": "Focused Sample Symbols",
     "NASDAQ": "NASDAQ",
     "NYSE": "NYSE",
     "ALL_US_EQUITIES": "All US Equities",
@@ -780,6 +781,10 @@ def get_market_universe_facets() -> dict:
 def _normalize_preset(preset: str | None) -> str:
     value = str(preset or "CUSTOM").strip().upper().replace(" ", "_")
     aliases = {
+        "FOCUSED": "FOCUSED_SAMPLE",
+        "SAMPLE": "FOCUSED_SAMPLE",
+        "SAMPLE_SYMBOLS": "FOCUSED_SAMPLE",
+        "FOCUSED_SAMPLE_SYMBOLS": "FOCUSED_SAMPLE",
         "ALL": "ALL_US_EQUITIES",
         "ALL_US": "ALL_US_EQUITIES",
         "ALL_US_STOCKS": "ALL_US_EQUITIES",
@@ -814,6 +819,18 @@ def resolve_universe_preset(preset: str, limit: int = 100) -> dict:
     normalized_preset = _normalize_preset(preset)
     if normalized_preset not in UNIVERSE_PRESET_LABELS or normalized_preset == "CUSTOM":
         raise ValueError("Unsupported universe preset.")
+
+    if normalized_preset == "FOCUSED_SAMPLE":
+        symbols = [symbol for symbol in DEFAULT_SAMPLE_SYMBOLS[: max(1, min(int(limit or 100), len(DEFAULT_SAMPLE_SYMBOLS) or 1))] if str(symbol).strip()]
+        return {
+            "preset": normalized_preset,
+            "label": UNIVERSE_PRESET_LABELS[normalized_preset],
+            "symbols": symbols,
+            "matched_count": len(symbols),
+            "returned_count": len(symbols),
+            "limit": len(symbols),
+            "universe_status": status,
+        }
 
     limit = max(1, min(int(limit or 100), TOP_MARKET_CAP_TARGET_COUNT))
     with session_scope() as session:

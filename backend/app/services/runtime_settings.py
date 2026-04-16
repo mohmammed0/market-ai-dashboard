@@ -606,7 +606,7 @@ def get_auto_trading_config() -> dict:
         "auto_trading_source": auto_source,
         "cycle_minutes": int(cycle_minutes),
         "cycle_minutes_source": cycle_source,
-        "universe_preset": str(universe_preset or "TOP_500_MARKET_CAP").strip().upper(),
+        "universe_preset": str(universe_preset or AUTO_TRADING_UNIVERSE_PRESET).strip().upper(),
         "universe_preset_source": universe_preset_source,
         "trading_mode": alpaca_config.get("trading_mode", "cash"),
         "margin_enabled": alpaca_config.get("margin_enabled", False),

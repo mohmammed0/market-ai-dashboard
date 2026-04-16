@@ -4,8 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.app.application.broker.service import liquidate_broker_positions
+from backend.app.config import DEFAULT_SAMPLE_SYMBOLS
 from backend.app.core.date_defaults import indicator_warmup_start_date_iso
 from backend.app.services.explainability import build_signal_explanation
+from backend.app.services.market_universe import resolve_universe_preset
+from backend.app.services.runtime_settings import get_auto_trading_config
 from core.analysis_service import analyze_symbol
 from news_engine import fetch_news
 
@@ -133,3 +136,30 @@ def test_signal_explanation_is_grounded_in_news_event_facts():
     assert explanation["signal"] == "BUY"
     assert any("earnings" in item.lower() for item in explanation["supporting_factors"])
     assert "technical alignment" in explanation["summary"].lower()
+
+
+def test_resolve_universe_preset_supports_focused_sample(monkeypatch):
+    monkeypatch.setattr("backend.app.services.market_universe.ensure_market_universe", lambda: {"ok": True})
+    payload = resolve_universe_preset("FOCUSED_SAMPLE", limit=5)
+
+    assert payload["preset"] == "FOCUSED_SAMPLE"
+    assert payload["returned_count"] == 5
+    assert payload["symbols"] == DEFAULT_SAMPLE_SYMBOLS[:5]
+
+
+def test_auto_trading_config_uses_config_default_preset(monkeypatch):
+    monkeypatch.setattr("backend.app.services.runtime_settings._resolve_setting", lambda key, records=None: {
+        "auto_trading.enabled": (True, "default"),
+        "auto_trading.cycle_minutes": (5, "default"),
+        "auto_trading.universe_preset": ("", "default"),
+        "broker.order_submission_enabled": (True, "default"),
+    }[key])
+    monkeypatch.setattr(
+        "backend.app.services.runtime_settings.get_alpaca_runtime_config",
+        lambda: {"trading_mode": "cash", "margin_enabled": False, "enabled": True, "configured": True, "paper": True},
+    )
+    monkeypatch.setattr("backend.app.services.runtime_settings.AUTO_TRADING_UNIVERSE_PRESET", "FOCUSED_SAMPLE")
+
+    payload = get_auto_trading_config()
+
+    assert payload["universe_preset"] == "FOCUSED_SAMPLE"
