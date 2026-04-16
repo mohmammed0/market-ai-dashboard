@@ -200,8 +200,38 @@ def sync_auto_trading_schedule() -> dict:
         )
         return {"updated": True, "action": "added", "minutes": minutes}
 
+    current_minutes = None
+    interval = getattr(getattr(job, "trigger", None), "interval", None)
+    if interval is not None:
+        try:
+            current_minutes = max(1, int(interval.total_seconds() // 60))
+        except Exception:
+            current_minutes = None
+    if current_minutes == minutes:
+        return {"updated": False, "action": "unchanged", "minutes": minutes}
+
     job.reschedule(trigger="interval", minutes=minutes)
     return {"updated": True, "action": "rescheduled", "minutes": minutes}
+
+
+def _sync_auto_trading_schedule_job():
+    try:
+        result = sync_auto_trading_schedule()
+        if result.get("updated"):
+            log_event(
+                logger,
+                logging.INFO,
+                "scheduler.auto_trading_schedule_synced",
+                action=result.get("action"),
+                minutes=result.get("minutes"),
+            )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "scheduler.auto_trading_schedule_sync_failed",
+            error=str(exc),
+        )
 
 
 def start_scheduler():
@@ -247,6 +277,13 @@ def start_scheduler():
             "interval",
             minutes=_runtime_auto_trading_cycle_minutes(),
             id="auto_trading_cycle",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            _sync_auto_trading_schedule_job,
+            "interval",
+            seconds=60,
+            id="auto_trading_schedule_sync",
             replace_existing=True,
         )
         # Smart automation — AI-powered opportunity scanner
