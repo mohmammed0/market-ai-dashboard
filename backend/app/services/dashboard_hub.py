@@ -24,6 +24,10 @@ from backend.app.services.automation_hub import get_automation_status
 from backend.app.services.breadth_engine import compute_market_breadth, compute_sector_rotation
 from backend.app.services.cache import get_cache_status
 from backend.app.services.dashboard_summary_helpers import (
+    _derive_action,
+    _is_actionable_opportunity,
+    _opportunity_quality,
+    _safe_float,
     build_focused_opportunity_snapshot,
     build_sample_scan_snapshot,
     safe_service_call,
@@ -45,6 +49,15 @@ from core.ranking_service import summarize_long_short
 
 
 def _build_opportunities_from_signal_history(signal_items: list[dict], sample_symbols: list[str]) -> list[dict]:
+    def _history_action(signal_value: str, confidence_value: float) -> str:
+        signal_norm = str(signal_value or "HOLD").upper().strip()
+        confidence_norm = float(confidence_value or 0.0)
+        if signal_norm == "BUY":
+            return "BUY" if confidence_norm >= 75 else "ADD" if confidence_norm >= 60 else "WATCH"
+        if signal_norm == "SELL":
+            return "EXIT" if confidence_norm >= 75 else "TRIM" if confidence_norm >= 60 else "WATCH"
+        return "HOLD" if confidence_norm >= 60 else "WATCH"
+
     sample_lookup = {str(symbol or "").strip().upper() for symbol in sample_symbols if str(symbol or "").strip()}
     selected: list[dict] = []
     seen: set[str] = set()
@@ -57,26 +70,32 @@ def _build_opportunities_from_signal_history(signal_items: list[dict], sample_sy
         analysis = payload.get("analysis") if isinstance(payload, dict) else {}
         signal_view = payload.get("signal_view") if isinstance(payload, dict) else {}
         signal = str(item.get("signal") or signal_view.get("signal") or "HOLD").upper()
+        confidence = float(item.get("confidence") or signal_view.get("confidence") or 0.0)
+        action = _history_action(signal, confidence)
+        if action == "WATCH" and confidence < 55:
+            continue
+        if action == "HOLD" and confidence < 58:
+            continue
         selected.append({
             "symbol": symbol,
             "signal": signal,
-            "confidence": float(item.get("confidence") or signal_view.get("confidence") or 0.0),
+            "confidence": confidence,
             "score": analysis.get("enhanced_combined_score", analysis.get("combined_score")),
             "reason": item.get("reasoning") or signal_view.get("reasoning") or analysis.get("ai_summary") or analysis.get("best_setup") or analysis.get("setup_type"),
             "setup_type": analysis.get("setup_type"),
             "best_setup": analysis.get("best_setup"),
             "risk_label": analysis.get("trend_mode") or analysis.get("market_regime") or "RANGE",
-            "action": signal,
+            "action": action,
         })
         seen.add(symbol)
         if len(selected) >= 6:
             break
 
-    priority = {"BUY": 0, "HOLD": 1, "SELL": 2}
+    priority = {"BUY": 0, "ADD": 1, "EXIT": 2, "TRIM": 3, "HOLD": 4, "WATCH": 5}
     return sorted(
         selected,
-        key=lambda row: (priority.get(str(row.get("signal") or "HOLD").upper(), 9), -float(row.get("confidence") or 0.0)),
-    )[:6]
+        key=lambda row: (priority.get(str(row.get("action") or "WATCH").upper(), 9), -float(row.get("confidence") or 0.0)),
+    )[:4]
 
 
 def get_dashboard_summary():
@@ -229,17 +248,27 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             for row in ranked_rows[:6]:
                 symbol = row.get("instrument") or row.get("symbol")
                 signal = str(row.get("enhanced_signal") or row.get("smart_signal") or row.get("signal") or "HOLD").upper()
+                confidence = float(row.get("confidence") or row.get("smart_confidence") or 0.0)
+                action = _derive_action(signal, confidence, row)
+                score = _safe_float(row.get("enhanced_combined_score"), _safe_float(row.get("combined_score"), 0.0))
+                news_items = row.get("news_items") or []
+                lead_news = news_items[0] if news_items else {}
+                if not _is_actionable_opportunity(action, confidence, score, lead_news.get("event_type")):
+                    continue
                 top_opportunities.append({
                     "symbol": symbol,
                     "signal": signal,
-                    "confidence": float(row.get("confidence") or row.get("smart_confidence") or 0.0),
-                    "score": row.get("enhanced_combined_score", row.get("combined_score")),
+                    "confidence": confidence,
+                    "score": score,
                     "reason": row.get("ai_summary") or row.get("best_setup") or row.get("setup_type") or row.get("reasons"),
                     "setup_type": row.get("setup_type"),
                     "best_setup": row.get("best_setup"),
                     "risk_label": row.get("trend_mode") or row.get("market_regime") or "RANGE",
-                    "action": signal,
+                    "action": action,
+                    "opportunity_score": _opportunity_quality(action, confidence, score, _safe_float(lead_news.get("impact_score"), 0.0)),
                 })
+                if len(top_opportunities) >= 4:
+                    break
         portfolio_snapshot = safe_service_call(
             build_portfolio_snapshot_payload,
             _empty_portfolio_snapshot(),

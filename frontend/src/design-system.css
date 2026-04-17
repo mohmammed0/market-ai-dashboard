@@ -2370,6 +2370,17 @@ label { color: var(--tv-text-muted); font-size: 12px; font-weight: 600; }
   line-height: 1.8;
 }
 
+.knowledge-search-form {
+  width: 100%;
+}
+
+.knowledge-detail-stack,
+.knowledge-research-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .analysis-quick-symbols {
   display: flex;
   align-items: center;

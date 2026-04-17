@@ -4,8 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.app.application.broker.service import liquidate_broker_positions
-from backend.app.config import DEFAULT_SAMPLE_SYMBOLS
+from backend.app.config import DEFAULT_SAMPLE_SYMBOLS, DECISION_OPPORTUNITY_MIN_CONFIDENCE
 from backend.app.core.date_defaults import indicator_warmup_start_date_iso
+from backend.app.services.confidence_calibration import apply_confidence_calibration_to_analysis, calibrate_confidence
+from backend.app.services.dashboard_summary_helpers import _derive_action, _is_actionable_opportunity
 from backend.app.services.explainability import build_signal_explanation
 from backend.app.services.market_universe import resolve_universe_preset
 from backend.app.services.runtime_settings import get_auto_trading_config
@@ -136,6 +138,105 @@ def test_signal_explanation_is_grounded_in_news_event_facts():
     assert explanation["signal"] == "BUY"
     assert any("earnings" in item.lower() for item in explanation["supporting_factors"])
     assert "technical alignment" in explanation["summary"].lower()
+
+
+def test_signal_explanation_prefers_ensemble_confidence_when_available():
+    explanation = build_signal_explanation(
+        {
+            "enhanced_signal": "HOLD",
+            "confidence": 62,
+            "technical_score": 0,
+            "ensemble_output": {"signal": "HOLD", "confidence": 34, "reasoning": "agreement=0.33"},
+        }
+    )
+
+    assert explanation["confidence"] == 34
+    assert "34%" in explanation["summary"]
+    assert "62%" not in explanation["summary"]
+
+
+def test_decision_action_mapping_prefers_useful_actions():
+    assert _derive_action("BUY", 83, {"technical_score": 2, "mtf_score": 1, "rs_score": 1}) == "BUY"
+    assert _derive_action("BUY", 68, {"technical_score": 1, "mtf_score": 0, "rs_score": 0}) == "ADD"
+    assert _derive_action("SELL", 82, {"technical_score": -2, "news_items": [{"sentiment": "NEGATIVE"}]}) == "EXIT"
+    assert _derive_action(
+        "HOLD",
+        61,
+        {
+            "technical_score": -2,
+            "news_items": [{"sentiment": "NEGATIVE"}],
+            "ml_output": {"prob_buy": 0.21, "prob_sell": 0.58},
+        },
+    ) == "TRIM"
+
+
+def test_actionable_filter_rejects_weak_watchs():
+    assert _is_actionable_opportunity("WATCH", 50, 0.2, None) is False
+    assert _is_actionable_opportunity("WATCH", 50, 0.2, "earnings") is False
+    assert _is_actionable_opportunity("WATCH", 57, 0.9, "earnings") is True
+    assert _is_actionable_opportunity("ADD", DECISION_OPPORTUNITY_MIN_CONFIDENCE, 0.2, None) is True
+    assert _is_actionable_opportunity("ADD", DECISION_OPPORTUNITY_MIN_CONFIDENCE - 1, 0.2, None) is False
+
+
+def test_confidence_calibration_reduces_overconfident_top_band():
+    profile = {
+        "enabled": True,
+        "status": "ready",
+        "samples_count": 120,
+        "bands": {
+            "85-100": {"samples": 80, "win_rate_pct": 46.0},
+        },
+        "actions": {
+            "BUY": {"samples": 60, "win_rate_pct": 42.0},
+            "ADD": {"samples": 20, "win_rate_pct": 48.0},
+        },
+    }
+    calibrated = calibrate_confidence(95, "BUY", profile)
+    assert calibrated < 80
+    assert calibrated >= 0
+
+
+def test_confidence_calibration_keeps_directional_strength_when_empirical_is_good():
+    profile = {
+        "enabled": True,
+        "status": "ready",
+        "samples_count": 160,
+        "bands": {
+            "70-85": {"samples": 70, "win_rate_pct": 74.0},
+            "85-100": {"samples": 20, "win_rate_pct": 76.0},
+        },
+        "actions": {
+            "BUY": {"samples": 90, "win_rate_pct": 75.0},
+        },
+    }
+    calibrated = calibrate_confidence(82, "BUY", profile)
+    assert calibrated >= 62
+    assert calibrated <= 90
+
+
+def test_apply_confidence_calibration_updates_analysis_payload():
+    profile = {
+        "enabled": True,
+        "status": "ready",
+        "generated_at": "2026-04-17T00:00:00Z",
+        "samples_count": 120,
+        "bands": {
+            "85-100": {"samples": 80, "win_rate_pct": 46.0},
+        },
+        "actions": {
+            "BUY": {"samples": 60, "win_rate_pct": 42.0},
+        },
+    }
+    analysis = {
+        "signal": "BUY",
+        "enhanced_signal": "BUY",
+        "confidence": 92,
+        "ensemble_output": {"signal": "BUY", "confidence": 95},
+    }
+    output = apply_confidence_calibration_to_analysis(analysis, profile)
+    assert output["confidence"] < 92
+    assert output["ensemble_output"]["confidence"] < 95
+    assert output["confidence_calibration"]["applied"] is True
 
 
 def test_resolve_universe_preset_supports_focused_sample(monkeypatch):

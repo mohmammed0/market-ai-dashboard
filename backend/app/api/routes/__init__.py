@@ -1,4 +1,5 @@
 from .ai import router as ai_router
+from .ai_research import router as ai_research_router
 from .metrics import router as metrics_router
 from .analyze import router as analyze_router
 from .alerts_center import router as alerts_router
@@ -13,6 +14,7 @@ from .events import router as events_router
 from .fundamentals import router as fundamentals_router
 from .health import router as health_router
 from .intelligence import router as intelligence_router
+from .knowledge import router as knowledge_router
 from .journal import router as journal_router
 from .jobs import router as jobs_router
 from .live import router as live_router
@@ -49,6 +51,7 @@ from .ai_chat import router as ai_chat_router
 __all__ = [
     "analyze_router",
     "ai_router",
+    "ai_research_router",
     "alerts_router",
     "automation_router",
     "backtest_router",
@@ -61,6 +64,7 @@ __all__ = [
     "fundamentals_router",
     "health_router",
     "intelligence_router",
+    "knowledge_router",
     "journal_router",
     "jobs_router",
     "live_router",

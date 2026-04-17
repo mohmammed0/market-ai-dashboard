@@ -21,6 +21,7 @@ from .platform_events import (
 )
 from .runtime_settings import RuntimeSetting
 from .workspace import Watchlist, WatchlistItem, WorkspaceState
+from .knowledge import KnowledgeDocument
 
 __all__ = [
     "AnalysisRun",
@@ -64,4 +65,5 @@ __all__ = [
     "Watchlist",
     "WatchlistItem",
     "WorkspaceState",
+    "KnowledgeDocument",
 ]

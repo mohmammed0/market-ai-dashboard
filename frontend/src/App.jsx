@@ -16,6 +16,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const BrokerPage = lazy(() => import("./pages/BrokerPage"));
 const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
 const RankingPage = lazy(() => import("./pages/RankingPage"));
+const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 
 function PageSkeleton() {
   return (
@@ -85,6 +86,7 @@ export default function App() {
                           <Route path="/settings" element={<SettingsPage />} />
                           <Route path="/analyze" element={<Navigate to="/ai-market" replace />} />
                           <Route path="/ranking" element={<RankingPage />} />
+                          <Route path="/knowledge" element={<KnowledgePage />} />
                           <Route path="/broker" element={<BrokerPage />} />
                           <Route path="/scan" element={<Navigate to="/ranking?mode=scan" replace />} />
                           <Route path="/ai-market" element={<AIMarketPage />} />

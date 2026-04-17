@@ -11,6 +11,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.app.api.routes import (
     ai_chat_router,
+    ai_research_router,
     ai_router,
     alerts_router,
     analyze_router,
@@ -26,6 +27,7 @@ from backend.app.api.routes import (
     fundamentals_router,
     health_router,
     intelligence_router,
+    knowledge_router,
     journal_router,
     jobs_router,
     live_router,
@@ -305,6 +307,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(auth_router)
     app.include_router(dashboard_router, prefix="/api")
     app.include_router(ai_router, prefix="/api")
+    app.include_router(ai_research_router, prefix="/api")
     app.include_router(analyze_router, prefix="/api")
     app.include_router(alerts_router, prefix="/api")
     app.include_router(automation_router, prefix="/api")
@@ -317,6 +320,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(execution_router, prefix="/api")
     app.include_router(events_router, prefix="/api")
     app.include_router(intelligence_router, prefix="/api")
+    app.include_router(knowledge_router, prefix="/api")
     app.include_router(journal_router, prefix="/api")
     app.include_router(jobs_router, prefix="/api")
     app.include_router(market_router, prefix="/api")

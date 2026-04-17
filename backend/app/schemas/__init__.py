@@ -14,6 +14,7 @@ from .research import AnalyzeRequest, BacktestRequest, HistoryRequest, Optimizer
 from .runtime_settings import AlpacaSettingsUpdateRequest
 from .terminal import MarketTerminalChartRequest, MarketTerminalContextRequest
 from .training import PaperOrderCreateRequest, TrainingJobStartRequest
+from .knowledge import AIMarketBriefRequest, AIResearchRequest, KnowledgeIngestItem, KnowledgeIngestRequest
 from .workspace import (
     FavoritesToggleRequest,
     WatchlistCreateRequest,
@@ -38,8 +39,12 @@ __all__ = [
     "HistoryRequest",
     "InferenceRequest",
     "JournalEntryRequest",
+    "KnowledgeIngestItem",
+    "KnowledgeIngestRequest",
     "MarketTerminalChartRequest",
     "MarketTerminalContextRequest",
+    "AIResearchRequest",
+    "AIMarketBriefRequest",
     "ModelBacktestRequest",
     "OptimizerRequest",
     "PaperSignalRefreshRequest",
