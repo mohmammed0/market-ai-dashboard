@@ -9,7 +9,12 @@ import logging
 import os
 
 from backend.app.application.broker.service import get_broker_summary
-from backend.app.config import LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL
+from backend.app.config import (
+    AUTO_TRADING_MIN_AGREEMENT,
+    AUTO_TRADING_MIN_ENSEMBLE_SCORE,
+    AUTO_TRADING_MIN_SIGNAL_CONFIDENCE,
+    LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL,
+)
 from backend.app.core.date_defaults import analysis_window_iso
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.domain.alerts.contracts import AlertRecord
@@ -283,6 +288,32 @@ def _build_signal_snapshot(symbol: str, strategy_mode: str, result: dict, start_
         reasoning=str(signal_view.get("reasoning") or ""),
         analysis_payload={"analysis": result, "quote": quote_payload, "signal_view": signal_view},
     )
+
+
+def _is_auto_executable_signal(signal_snapshot: SignalSnapshot) -> bool:
+    """Gate auto-trading to only execute sufficiently strong directional signals."""
+    signal = str(signal_snapshot.signal or "").upper().strip()
+    if signal not in {"BUY", "SELL"}:
+        return False
+
+    confidence = _safe_float(signal_snapshot.confidence, 0.0)
+    if confidence < float(AUTO_TRADING_MIN_SIGNAL_CONFIDENCE):
+        return False
+
+    payload = signal_snapshot.analysis_payload if isinstance(signal_snapshot.analysis_payload, dict) else {}
+    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+    ensemble = analysis.get("ensemble_output") if isinstance(analysis.get("ensemble_output"), dict) else {}
+
+    if ensemble:
+        score_magnitude = abs(_safe_float(ensemble.get("ensemble_score"), 0.0))
+        if score_magnitude < float(AUTO_TRADING_MIN_ENSEMBLE_SCORE):
+            return False
+
+        agreement_raw = ensemble.get("agreement_ratio")
+        if agreement_raw is not None and _safe_float(agreement_raw, 0.0) < float(AUTO_TRADING_MIN_AGREEMENT):
+            return False
+
+    return True
 
 
 def _build_trade_intents(current_position: PositionState | None, signal_snapshot: SignalSnapshot, quantity: float) -> list[TradeIntent]:
@@ -1103,7 +1134,8 @@ def refresh_signals(
                 if isinstance(mode_output, dict) and mode_output.get("error"):
                     repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=f"{normalized_symbol} {mode} output degraded", payload=mode_output))
 
-                if auto_execute and signal_snapshot.signal in {"BUY", "SELL"}:
+                should_auto_execute = auto_execute and signal_snapshot.signal in {"BUY", "SELL"}
+                if should_auto_execute and _is_auto_executable_signal(signal_snapshot):
                     effective_quantity = normalized_quantity_map.get(normalized_symbol, quantity)
                     command = ExecutionCommand(
                         symbol=normalized_symbol,
@@ -1119,6 +1151,28 @@ def refresh_signals(
                         _apply_trade_intent(repo, current_row, intent, correlation_id=correlation_id, signal_id=signal_id)
                         if intent.intent.startswith("CLOSE"):
                             current_row = None
+                elif should_auto_execute:
+                    repo.append_alert(
+                        AlertRecord(
+                            symbol=normalized_symbol,
+                            strategy_mode=mode,
+                            alert_type="auto_trade_skipped_low_strength",
+                            severity="info",
+                            message=(
+                                f"{normalized_symbol} auto-execution skipped: signal strength below gate "
+                                f"(min_conf={AUTO_TRADING_MIN_SIGNAL_CONFIDENCE}, "
+                                f"min_score={AUTO_TRADING_MIN_ENSEMBLE_SCORE}, "
+                                f"min_agreement={AUTO_TRADING_MIN_AGREEMENT})."
+                            ),
+                            payload={
+                                "signal": signal_snapshot.signal,
+                                "confidence": signal_snapshot.confidence,
+                                "analysis": signal_snapshot.analysis_payload.get("analysis")
+                                if isinstance(signal_snapshot.analysis_payload, dict)
+                                else None,
+                            },
+                        )
+                    )
 
                 items.append({"symbol": normalized_symbol, "strategy_mode": mode, "signal": signal_snapshot.signal, "confidence": signal_snapshot.confidence, "price": signal_snapshot.price, "reasoning": signal_snapshot.reasoning})
         except Exception as exc:

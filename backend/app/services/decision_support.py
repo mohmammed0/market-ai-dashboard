@@ -4,10 +4,21 @@ import logging
 from datetime import date
 from typing import Any
 
+from backend.app.config import (
+    DECISION_ACTION_ADD_CONFIDENCE,
+    DECISION_ACTION_BUY_CONFIDENCE,
+    DECISION_ACTION_EXIT_CONFIDENCE,
+    DECISION_ACTION_HOLD_CONFIDENCE,
+    DECISION_ACTION_TRIM_CONFIDENCE,
+)
 from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.core.logging_utils import get_logger
 from backend.app.services import get_cache
 from backend.app.services.cached_analysis import get_ranked_analysis_result
+from backend.app.services.confidence_calibration import (
+    apply_confidence_calibration_to_analysis,
+    get_latest_confidence_calibration_profile,
+)
 from backend.app.services.continuous_learning import list_generated_strategy_candidates
 from backend.app.services.events_calendar import fetch_market_events
 from backend.app.services.explainability import build_signal_explanation
@@ -75,6 +86,43 @@ def _sentiment_tone(value: Any) -> str:
     if normalized in {"HOLD", "NEUTRAL"}:
         return "warning"
     return "subtle"
+
+
+def _resolve_action(signal: str, confidence: float, analysis: dict) -> str:
+    normalized_signal = str(signal or "HOLD").upper().strip()
+    technical_score = _safe_float(analysis.get("technical_score"), 0.0) or 0.0
+    ensemble_output = analysis.get("ensemble_output") or {}
+    ensemble_score = abs(_safe_float(ensemble_output.get("ensemble_score"), 0.0) or 0.0)
+    news_items = analysis.get("news_items") or []
+    news_tone = str((news_items[0] if news_items else {}).get("sentiment") or "").upper()
+    ml_output = analysis.get("ml_output") or {}
+    ml_buy = _safe_float(ml_output.get("prob_buy"), 0.0) or 0.0
+    ml_sell = _safe_float(ml_output.get("prob_sell"), 0.0) or 0.0
+
+    if normalized_signal == "BUY":
+        if (
+            confidence >= DECISION_ACTION_BUY_CONFIDENCE
+            and technical_score >= 1
+            and (ml_buy >= ml_sell or news_tone != "NEGATIVE")
+        ):
+            return "BUY"
+        if (
+            confidence >= DECISION_ACTION_ADD_CONFIDENCE
+            and (technical_score >= -0.5 or ensemble_score >= 0.2)
+        ):
+            return "ADD"
+        return "WATCH"
+    if normalized_signal == "SELL":
+        if confidence >= DECISION_ACTION_EXIT_CONFIDENCE or (technical_score <= -3 and news_tone == "NEGATIVE"):
+            return "EXIT"
+        if confidence >= DECISION_ACTION_TRIM_CONFIDENCE or ml_sell > ml_buy + 0.10:
+            return "TRIM"
+        return "WATCH"
+    if technical_score <= -2 and (news_tone == "NEGATIVE" or ml_sell > ml_buy + 0.15):
+        return "TRIM"
+    if confidence >= DECISION_ACTION_HOLD_CONFIDENCE:
+        return "HOLD"
+    return "WATCH"
 
 
 def _build_chart_plan(analysis: dict, explanation: dict, events: list[dict]) -> dict:
@@ -258,11 +306,16 @@ def build_decision_payload(
             include_dl=include_dl,
             ttl_seconds=300,
         )
+        calibration_profile = get_latest_confidence_calibration_profile()
+        analysis = apply_confidence_calibration_to_analysis(analysis, calibration_profile)
         explanation = build_signal_explanation(analysis)
         events = (fetch_market_events(symbols=[normalized_symbol], limit=4) or {}).get("items") or []
         strategy_hooks = _build_strategy_hooks(normalized_symbol)
         news_items = analysis.get("news_items") or []
         ai_summary = analysis.get("ai_summary")
+        resolved_signal = str(explanation.get("signal") or analysis.get("enhanced_signal") or analysis.get("signal") or "HOLD").upper()
+        resolved_confidence = round(float(explanation.get("confidence") or analysis.get("confidence", 0.0) or 0.0), 2)
+        resolved_action = _resolve_action(resolved_signal, resolved_confidence, analysis)
         rationale = (
             ((analysis.get("ensemble_output") or {}).get("reasoning") if include_ensemble else None)
             or analysis.get("reasons")
@@ -324,9 +377,10 @@ def build_decision_payload(
 
         payload: dict = {
             "symbol": normalized_symbol,
-            "stance": str(analysis.get("enhanced_signal") or analysis.get("signal") or "HOLD").upper(),
+            "stance": resolved_signal,
             "signal": str(analysis.get("signal") or "HOLD").upper(),
-            "confidence": round(float(analysis.get("confidence", 0.0) or 0.0), 2),
+            "confidence": resolved_confidence,
+            "action": resolved_action,
             "best_setup": analysis.get("best_setup"),
             "setup_type": analysis.get("setup_type"),
             "rationale": rationale,

@@ -135,6 +135,142 @@ NEWS_REFRESH_PER_SYMBOL_LIMIT = max(1, min(int(os.getenv("MARKET_AI_NEWS_REFRESH
 SIGNAL_REFRESH_MINUTES = max(1, min(int(os.getenv("MARKET_AI_SIGNAL_REFRESH_MINUTES", "5")), 15))
 SIGNAL_CACHE_TTL_SECONDS = max(60, min(int(os.getenv("MARKET_AI_SIGNAL_CACHE_TTL_SECONDS", "300")), 1800))
 SIGNAL_REFRESH_MAX_WORKERS = max(1, min(int(os.getenv("MARKET_AI_SIGNAL_REFRESH_MAX_WORKERS", "3")), 4))
+CONFIDENCE_CALIBRATION_ENABLED = os.getenv("MARKET_AI_CONFIDENCE_CALIBRATION_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+CONFIDENCE_CALIBRATION_LOOKBACK_DAYS = max(30, min(int(os.getenv("MARKET_AI_CONFIDENCE_CALIBRATION_LOOKBACK_DAYS", "120")), 240))
+CONFIDENCE_CALIBRATION_HOLD_DAYS = max(2, min(int(os.getenv("MARKET_AI_CONFIDENCE_CALIBRATION_HOLD_DAYS", "5")), 15))
+CONFIDENCE_CALIBRATION_MIN_SAMPLES = max(8, min(int(os.getenv("MARKET_AI_CONFIDENCE_CALIBRATION_MIN_SAMPLES", "14")), 120))
+CONFIDENCE_CALIBRATION_CACHE_TTL_SECONDS = max(300, min(int(os.getenv("MARKET_AI_CONFIDENCE_CALIBRATION_CACHE_TTL_SECONDS", "3600")), 21600))
+TRADER_PROFILE = os.getenv("MARKET_AI_TRADER_PROFILE", "strong").strip().lower()
+if TRADER_PROFILE not in {"conservative", "balanced", "strong"}:
+    TRADER_PROFILE = "balanced"
+
+_TRADER_PROFILE_DEFAULTS = {
+    "conservative": {
+        "ensemble_buy_threshold": 0.62,
+        "ensemble_sell_threshold": -0.62,
+        "directional_min_confidence": 62.0,
+        "hold_max_confidence": 75.0,
+        "opportunity_min_confidence": 60.0,
+        "action_buy_confidence": 82.0,
+        "action_add_confidence": 68.0,
+        "action_exit_confidence": 80.0,
+        "action_trim_confidence": 64.0,
+        "action_hold_confidence": 62.0,
+        "auto_min_signal_confidence": 70.0,
+        "auto_min_ensemble_score": 0.32,
+        "auto_min_agreement": 0.42,
+    },
+    "balanced": {
+        "ensemble_buy_threshold": 0.55,
+        "ensemble_sell_threshold": -0.55,
+        "directional_min_confidence": 58.0,
+        "hold_max_confidence": 72.0,
+        "opportunity_min_confidence": 52.0,
+        "action_buy_confidence": 80.0,
+        "action_add_confidence": 64.0,
+        "action_exit_confidence": 78.0,
+        "action_trim_confidence": 60.0,
+        "action_hold_confidence": 60.0,
+        "auto_min_signal_confidence": 64.0,
+        "auto_min_ensemble_score": 0.24,
+        "auto_min_agreement": 0.34,
+    },
+    "strong": {
+        "ensemble_buy_threshold": 0.47,
+        "ensemble_sell_threshold": -0.47,
+        "directional_min_confidence": 55.0,
+        "hold_max_confidence": 67.0,
+        "opportunity_min_confidence": 56.0,
+        "action_buy_confidence": 75.0,
+        "action_add_confidence": 58.0,
+        "action_exit_confidence": 73.0,
+        "action_trim_confidence": 56.0,
+        "action_hold_confidence": 55.0,
+        "auto_min_signal_confidence": 59.0,
+        "auto_min_ensemble_score": 0.18,
+        "auto_min_agreement": 0.25,
+    },
+}
+_PROFILE_DEFAULTS = _TRADER_PROFILE_DEFAULTS[TRADER_PROFILE]
+
+DECISION_ENSEMBLE_BUY_THRESHOLD = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ENSEMBLE_BUY_THRESHOLD",
+        str(_PROFILE_DEFAULTS["ensemble_buy_threshold"]),
+    )
+)
+DECISION_ENSEMBLE_SELL_THRESHOLD = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ENSEMBLE_SELL_THRESHOLD",
+        str(_PROFILE_DEFAULTS["ensemble_sell_threshold"]),
+    )
+)
+DECISION_DIRECTIONAL_MIN_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_DIRECTIONAL_MIN_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["directional_min_confidence"]),
+    )
+)
+DECISION_HOLD_MAX_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_HOLD_MAX_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["hold_max_confidence"]),
+    )
+)
+DECISION_OPPORTUNITY_MIN_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_OPPORTUNITY_MIN_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["opportunity_min_confidence"]),
+    )
+)
+DECISION_ACTION_BUY_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ACTION_BUY_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["action_buy_confidence"]),
+    )
+)
+DECISION_ACTION_ADD_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ACTION_ADD_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["action_add_confidence"]),
+    )
+)
+DECISION_ACTION_EXIT_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ACTION_EXIT_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["action_exit_confidence"]),
+    )
+)
+DECISION_ACTION_TRIM_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ACTION_TRIM_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["action_trim_confidence"]),
+    )
+)
+DECISION_ACTION_HOLD_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_DECISION_ACTION_HOLD_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["action_hold_confidence"]),
+    )
+)
+AUTO_TRADING_MIN_SIGNAL_CONFIDENCE = float(
+    os.getenv(
+        "MARKET_AI_AUTO_TRADING_MIN_SIGNAL_CONFIDENCE",
+        str(_PROFILE_DEFAULTS["auto_min_signal_confidence"]),
+    )
+)
+AUTO_TRADING_MIN_ENSEMBLE_SCORE = float(
+    os.getenv(
+        "MARKET_AI_AUTO_TRADING_MIN_ENSEMBLE_SCORE",
+        str(_PROFILE_DEFAULTS["auto_min_ensemble_score"]),
+    )
+)
+AUTO_TRADING_MIN_AGREEMENT = float(
+    os.getenv(
+        "MARKET_AI_AUTO_TRADING_MIN_AGREEMENT",
+        str(_PROFILE_DEFAULTS["auto_min_agreement"]),
+    )
+)
 RETRAIN_CYCLE_HOURS = int(os.getenv("MARKET_AI_RETRAIN_CYCLE_HOURS", "24"))
 ENABLE_AUTO_RETRAIN = os.getenv("MARKET_AI_ENABLE_AUTO_RETRAIN", "0").strip().lower() not in {"0", "false", "no"}
 ENABLE_AUTONOMOUS_CYCLE = os.getenv("MARKET_AI_ENABLE_AUTONOMOUS_CYCLE", "0").strip().lower() not in {"0", "false", "no"}
