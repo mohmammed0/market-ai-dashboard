@@ -173,7 +173,7 @@ class ApiContractsTests(unittest.TestCase):
         self.assertIn("automation", payload)
         self.assertIn("telegram", payload)
 
-    def test_portfolio_snapshot_prefers_internal_when_broker_is_connected_but_operationally_empty(self):
+    def test_portfolio_snapshot_prefers_internal_when_broker_is_connected_but_internal_book_remains_active(self):
         canonical_snapshot = PortfolioSnapshot(
             generated_at=datetime.now(UTC),
             positions=[],
@@ -226,6 +226,9 @@ class ApiContractsTests(unittest.TestCase):
         ), patch("backend.app.application.portfolio.service.load_symbol_profiles", return_value={}), patch(
             "backend.app.application.portfolio.service.build_canonical_portfolio_snapshot",
             return_value=canonical_snapshot,
+        ), patch(
+            "backend.app.application.execution.service.sync_internal_positions_from_broker",
+            return_value={"count": 0},
         ):
             payload = build_portfolio_snapshot_payload()
 
@@ -233,6 +236,138 @@ class ApiContractsTests(unittest.TestCase):
         self.assertEqual(payload.source_type, "internal")
         self.assertEqual(payload.source_label, "Internal Simulated Paper")
         self.assertTrue(payload.broker_connected)
+
+    def test_portfolio_snapshot_keeps_clean_broker_when_internal_has_only_history(self):
+        canonical_snapshot = PortfolioSnapshot(
+            generated_at=datetime.now(UTC),
+            positions=[],
+            sources=[],
+            total_market_value=0.0,
+            total_unrealized_pnl=0.0,
+        )
+        internal_portfolio = {
+            "items": [],
+            "summary": {
+                "open_positions": 0,
+                "invested_cost": 0.0,
+                "cash_balance": 100000.0,
+                "total_equity": 100010.0,
+                "portfolio_value": 100010.0,
+                "total_market_value": 0.0,
+                "total_unrealized_pnl": 0.0,
+                "total_realized_pnl": 10.0,
+                "total_trades": 2,
+                "starting_cash": 100000.0,
+            },
+        }
+        broker_summary = {
+            "connected": True,
+            "paper": True,
+            "provider": "alpaca",
+            "mode": "paper",
+            "positions": [],
+            "orders": [],
+            "account": {"cash": 100000.0, "equity": 100000.0, "portfolio_value": 100000.0},
+        }
+        with patch("backend.app.application.portfolio.service.get_internal_portfolio", return_value=internal_portfolio), patch(
+            "backend.app.application.portfolio.service.get_broker_summary", return_value=broker_summary
+        ), patch("backend.app.application.portfolio.service.list_paper_orders", return_value={"items": []}), patch(
+            "backend.app.application.portfolio.service.get_trade_history",
+            return_value={"items": [{"symbol": "AAPL", "side": "BUY", "quantity": 1, "price": 180.0}]},
+        ), patch("backend.app.application.portfolio.service.load_symbol_profiles", return_value={}), patch(
+            "backend.app.application.portfolio.service.build_canonical_portfolio_snapshot",
+            return_value=canonical_snapshot,
+        ), patch(
+            "backend.app.application.execution.service.sync_internal_positions_from_broker",
+        ) as sync_mock:
+            payload = build_portfolio_snapshot_payload()
+
+        self.assertEqual(payload.active_source, "broker_paper")
+        self.assertEqual(payload.source_type, "broker")
+        self.assertEqual(payload.source_label, "Broker Paper")
+        self.assertTrue(payload.broker_connected)
+        sync_mock.assert_not_called()
+
+    def test_portfolio_snapshot_resyncs_internal_positions_when_clean_broker_replaces_old_account(self):
+        canonical_snapshot = PortfolioSnapshot(
+            generated_at=datetime.now(UTC),
+            positions=[],
+            sources=[],
+            total_market_value=0.0,
+            total_unrealized_pnl=0.0,
+        )
+        stale_internal_portfolio = {
+            "items": [
+                {
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "quantity": 2,
+                    "avg_entry_price": 180.0,
+                    "current_price": 181.5,
+                    "market_value": 363.0,
+                    "unrealized_pnl": 3.0,
+                    "realized_pnl": 0.0,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            ],
+            "summary": {
+                "open_positions": 1,
+                "invested_cost": 360.0,
+                "cash_balance": 99640.0,
+                "total_equity": 100003.0,
+                "portfolio_value": 100003.0,
+                "total_market_value": 363.0,
+                "total_unrealized_pnl": 3.0,
+                "total_realized_pnl": 0.0,
+                "total_trades": 1,
+                "starting_cash": 100000.0,
+            },
+        }
+        synced_internal_portfolio = {
+            "items": [],
+            "summary": {
+                "open_positions": 0,
+                "invested_cost": 0.0,
+                "cash_balance": 100000.0,
+                "total_equity": 100000.0,
+                "portfolio_value": 100000.0,
+                "total_market_value": 0.0,
+                "total_unrealized_pnl": 0.0,
+                "total_realized_pnl": 0.0,
+                "total_trades": 1,
+                "starting_cash": 100000.0,
+            },
+        }
+        broker_summary = {
+            "connected": True,
+            "paper": True,
+            "provider": "alpaca",
+            "mode": "paper",
+            "positions": [],
+            "orders": [],
+            "account": {"cash": 100000.0, "equity": 100000.0, "portfolio_value": 100000.0},
+        }
+        with patch(
+            "backend.app.application.portfolio.service.get_internal_portfolio",
+            side_effect=[stale_internal_portfolio, synced_internal_portfolio],
+        ), patch(
+            "backend.app.application.portfolio.service.get_broker_summary", return_value=broker_summary
+        ), patch("backend.app.application.portfolio.service.list_paper_orders", return_value={"items": []}), patch(
+            "backend.app.application.portfolio.service.get_trade_history",
+            return_value={"items": [{"symbol": "AAPL", "side": "BUY", "quantity": 2, "price": 180.0}]},
+        ), patch("backend.app.application.portfolio.service.load_symbol_profiles", return_value={}), patch(
+            "backend.app.application.portfolio.service.build_canonical_portfolio_snapshot",
+            return_value=canonical_snapshot,
+        ), patch(
+            "backend.app.application.execution.service.sync_internal_positions_from_broker",
+            return_value={"count": 0, "closed_symbols": ["AAPL"]},
+        ) as sync_mock:
+            payload = build_portfolio_snapshot_payload()
+
+        self.assertEqual(payload.active_source, "broker_paper")
+        self.assertEqual(payload.summary.open_positions, 0)
+        self.assertTrue(payload.broker_connected)
+        sync_mock.assert_called_once_with(strategy_mode="classic")
 
     def test_portfolio_snapshot_keeps_broker_when_broker_view_has_real_activity(self):
         canonical_snapshot = PortfolioSnapshot(

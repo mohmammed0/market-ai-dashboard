@@ -234,6 +234,24 @@ def _has_meaningful_snapshot_activity(
     )
 
 
+def _has_active_snapshot_book_state(
+    summary: PortfolioViewSummary,
+    positions: list[PortfolioViewPosition],
+    open_orders: list[PortfolioViewOrder],
+) -> bool:
+    return any(
+        (
+            bool(positions),
+            bool(open_orders),
+            int(summary.open_positions or 0) > 0,
+            int(summary.open_orders or 0) > 0,
+            abs(float(summary.total_market_value or 0.0)) > 0.0001,
+            abs(float(summary.invested_cost or 0.0)) > 0.0001,
+            abs(float(summary.total_unrealized_pnl or 0.0)) > 0.0001,
+        )
+    )
+
+
 def _build_internal_snapshot_view(internal: dict) -> tuple[
     list[PortfolioViewPosition],
     list[PortfolioViewOrder],
@@ -448,11 +466,25 @@ def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
             internal_positions, internal_orders, internal_open_orders, internal_trades, internal_summary = _build_internal_snapshot_view(
                 internal
             )
-            if _has_meaningful_snapshot_activity(
+            if broker_source == "broker_paper" and _has_active_snapshot_book_state(
                 internal_summary,
                 internal_positions,
                 internal_open_orders,
-                internal_trades,
+            ):
+                try:
+                    from backend.app.application.execution.service import sync_internal_positions_from_broker
+
+                    sync_internal_positions_from_broker(strategy_mode="classic")
+                    internal = get_internal_portfolio(limit=500)
+                    internal_positions, internal_orders, internal_open_orders, internal_trades, internal_summary = _build_internal_snapshot_view(
+                        internal
+                    )
+                except Exception:
+                    pass
+            if _has_active_snapshot_book_state(
+                internal_summary,
+                internal_positions,
+                internal_open_orders,
             ):
                 positions = internal_positions
                 orders = internal_orders
