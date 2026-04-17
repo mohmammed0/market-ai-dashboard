@@ -32,8 +32,10 @@ DATABASE_LEGACY_BOOTSTRAP = os.getenv(
     "MARKET_AI_DB_LEGACY_BOOTSTRAP",
     "1" if DATABASE_IS_SQLITE and APP_ENV != "production" else "0",
 ).strip().lower() not in {"0", "false", "no"}
-DATABASE_POOL_SIZE = max(1, int(os.getenv("MARKET_AI_DB_POOL_SIZE", "5")))
-DATABASE_MAX_OVERFLOW = max(0, int(os.getenv("MARKET_AI_DB_MAX_OVERFLOW", "10")))
+# Keep conservative DB pool defaults to avoid exhausting Postgres connections
+# when multiple app processes are running on constrained servers.
+DATABASE_POOL_SIZE = max(1, int(os.getenv("MARKET_AI_DB_POOL_SIZE", "2")))
+DATABASE_MAX_OVERFLOW = max(0, int(os.getenv("MARKET_AI_DB_MAX_OVERFLOW", "2")))
 DATABASE_POOL_TIMEOUT_SECONDS = max(1, int(os.getenv("MARKET_AI_DB_POOL_TIMEOUT_SECONDS", "30")))
 DATABASE_POOL_RECYCLE_SECONDS = max(30, int(os.getenv("MARKET_AI_DB_POOL_RECYCLE_SECONDS", "1800")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(1, int(os.getenv("MARKET_AI_DB_CONNECT_TIMEOUT_SECONDS", "10")))

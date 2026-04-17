@@ -76,6 +76,24 @@ def provider_symbol(symbol: str) -> str:
     return normalize_symbol(symbol).replace(".", "-")
 
 
+def provider_symbol_candidates(symbol: str) -> list[str]:
+    normalized = normalize_symbol(symbol)
+    candidates = [
+        provider_symbol(normalized),
+        normalized,
+        normalized.replace("-", "."),
+    ]
+    prepared: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        cleaned = str(candidate or "").strip().upper()
+        if not cleaned or cleaned in seen:
+            continue
+        prepared.append(cleaned)
+        seen.add(cleaned)
+    return prepared
+
+
 def _safe_float(value, default: float | None = None) -> float | None:
     try:
         if value in (None, ""):
@@ -566,22 +584,47 @@ class YahooMarketDataProvider(MarketDataProvider):
         end_dt = pd.to_datetime(end_date, errors="coerce") if end_date else None
         request_start = None if start_dt is None or pd.isna(start_dt) else start_dt.strftime("%Y-%m-%d")
         request_end = None if end_dt is None or pd.isna(end_dt) else (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-        try:
-            fetched = yf.download(
-                provider_symbol(symbol),
-                start=request_start,
-                end=request_end,
-                interval=interval,
-                progress=False,
-                auto_adjust=False,
-            )
-        except Exception as exc:
-            detail = " ".join(str(exc).split()) or exc.__class__.__name__
-            return ProviderHistoryResult(frame=None, provider=self.name, error=f"yfinance download failed: {detail}")
+        fetched = None
+        attempts: list[str] = []
+        last_error = None
+        for candidate in provider_symbol_candidates(symbol):
+            attempts.append(candidate)
+            try:
+                candidate_frame = yf.download(
+                    candidate,
+                    start=request_start,
+                    end=request_end,
+                    interval=interval,
+                    progress=False,
+                    auto_adjust=False,
+                )
+            except Exception as exc:
+                last_error = " ".join(str(exc).split()) or exc.__class__.__name__
+                continue
+            if candidate_frame is not None and not candidate_frame.empty:
+                fetched = candidate_frame
+                break
         if fetched is None or fetched.empty:
-            return ProviderHistoryResult(frame=None, provider=self.name, error=f"No Yahoo bars returned for {normalize_symbol(symbol)}.")
+            attempted = ",".join(attempts)
+            if last_error:
+                return ProviderHistoryResult(
+                    frame=None,
+                    provider=self.name,
+                    error=f"No Yahoo bars returned for {normalize_symbol(symbol)} (attempted={attempted}; last_error={last_error}).",
+                )
+            return ProviderHistoryResult(
+                frame=None,
+                provider=self.name,
+                error=f"No Yahoo bars returned for {normalize_symbol(symbol)} (attempted={attempted}).",
+            )
         fetched = fetched.reset_index()
-        fetched.columns = [str(column).lower().replace(" ", "_") for column in fetched.columns]
+        if getattr(fetched.columns, "nlevels", 1) > 1:
+            fetched.columns = [
+                str(column[0] if isinstance(column, tuple) else column).lower().replace(" ", "_")
+                for column in fetched.columns
+            ]
+        else:
+            fetched.columns = [str(column).lower().replace(" ", "_") for column in fetched.columns]
         date_col = "date" if "date" in fetched.columns else fetched.columns[0]
         fetched = fetched.rename(columns={date_col: "date"})
         frame = _normalize_frame(
@@ -601,45 +644,61 @@ class YahooMarketDataProvider(MarketDataProvider):
     def fetch_snapshot(self, symbol: str, include_profile: bool = False) -> ProviderSnapshotResult:
         if yf is None:
             return ProviderSnapshotResult(snapshot=None, provider=self.name, error="yfinance unavailable")
-        try:
-            ticker = yf.Ticker(provider_symbol(symbol))
-            info = getattr(ticker, "fast_info", None) or {}
-            price = info.get("lastPrice") or info.get("last_price")
-            prev_close = info.get("previousClose") or info.get("previous_close")
-            volume = info.get("lastVolume") or info.get("last_volume")
-            market_cap = info.get("marketCap") or info.get("market_cap")
-            profile = {}
-            if include_profile:
-                raw_info = getattr(ticker, "info", None) or {}
-                profile = {
-                    "short_name": raw_info.get("shortName") or raw_info.get("longName"),
-                    "exchange": raw_info.get("exchange"),
-                    "quote_type": raw_info.get("quoteType"),
-                    "market_cap": raw_info.get("marketCap") or market_cap,
-                }
-            if price is None and prev_close is None:
-                return ProviderSnapshotResult(snapshot=None, provider=self.name, error=f"No Yahoo snapshot returned for {normalize_symbol(symbol)}.")
-            change = None if prev_close in (None, 0) or price is None else float(price) - float(prev_close)
-            change_pct = None if prev_close in (None, 0) or change is None else (change / float(prev_close)) * 100.0
+        attempts: list[str] = []
+        last_error = None
+        for candidate in provider_symbol_candidates(symbol):
+            attempts.append(candidate)
+            try:
+                ticker = yf.Ticker(candidate)
+                info = getattr(ticker, "fast_info", None) or {}
+                price = info.get("lastPrice") or info.get("last_price")
+                prev_close = info.get("previousClose") or info.get("previous_close")
+                volume = info.get("lastVolume") or info.get("last_volume")
+                market_cap = info.get("marketCap") or info.get("market_cap")
+                profile = {}
+                if include_profile:
+                    raw_info = getattr(ticker, "info", None) or {}
+                    profile = {
+                        "short_name": raw_info.get("shortName") or raw_info.get("longName"),
+                        "exchange": raw_info.get("exchange"),
+                        "quote_type": raw_info.get("quoteType"),
+                        "market_cap": raw_info.get("marketCap") or market_cap,
+                    }
+                if price is None and prev_close is None:
+                    continue
+                change = None if prev_close in (None, 0) or price is None else float(price) - float(prev_close)
+                change_pct = None if prev_close in (None, 0) or change is None else (change / float(prev_close)) * 100.0
+                return ProviderSnapshotResult(
+                    snapshot={
+                        "symbol": normalize_symbol(symbol),
+                        "price": None if price is None else round(float(price), 4),
+                        "prev_close": None if prev_close is None else round(float(prev_close), 4),
+                        "change": None if change is None else round(float(change), 4),
+                        "change_pct": None if change_pct is None else round(float(change_pct), 4),
+                        "volume": None if volume is None else float(volume),
+                        "market_cap": None if (profile.get("market_cap") if include_profile else market_cap) is None else float(profile.get("market_cap") if include_profile else market_cap),
+                        "short_name": profile.get("short_name") if include_profile else None,
+                        "exchange_name": profile.get("exchange") if include_profile else None,
+                        "quote_type": profile.get("quote_type") if include_profile else None,
+                        "source": "yahoo_market_data",
+                    },
+                    provider=self.name,
+                )
+            except Exception as exc:
+                last_error = " ".join(str(exc).split()) or exc.__class__.__name__
+                continue
+        attempted = ",".join(attempts)
+        if last_error:
             return ProviderSnapshotResult(
-                snapshot={
-                    "symbol": normalize_symbol(symbol),
-                    "price": None if price is None else round(float(price), 4),
-                    "prev_close": None if prev_close is None else round(float(prev_close), 4),
-                    "change": None if change is None else round(float(change), 4),
-                    "change_pct": None if change_pct is None else round(float(change_pct), 4),
-                    "volume": None if volume is None else float(volume),
-                    "market_cap": None if (profile.get("market_cap") if include_profile else market_cap) is None else float(profile.get("market_cap") if include_profile else market_cap),
-                    "short_name": profile.get("short_name") if include_profile else None,
-                    "exchange_name": profile.get("exchange") if include_profile else None,
-                    "quote_type": profile.get("quote_type") if include_profile else None,
-                    "source": "yahoo_market_data",
-                },
+                snapshot=None,
                 provider=self.name,
+                error=f"No Yahoo snapshot returned for {normalize_symbol(symbol)} (attempted={attempted}; last_error={last_error}).",
             )
-        except Exception as exc:
-            detail = " ".join(str(exc).split()) or exc.__class__.__name__
-            return ProviderSnapshotResult(snapshot=None, provider=self.name, error=f"Yahoo snapshot request failed: {detail}")
+        return ProviderSnapshotResult(
+            snapshot=None,
+            provider=self.name,
+            error=f"No Yahoo snapshot returned for {normalize_symbol(symbol)} (attempted={attempted}).",
+        )
 
 
 PROVIDER_REGISTRY = {
