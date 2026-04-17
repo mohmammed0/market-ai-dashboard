@@ -69,7 +69,14 @@ class ProviderSnapshotResult:
 
 
 def normalize_symbol(symbol: str) -> str:
-    return str(symbol or "").strip().upper()
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return ""
+    if normalized.endswith("^") and not normalized.startswith("^"):
+        normalized = f"^{normalized[:-1]}"
+    if normalized.startswith("^") and normalized.count("^") > 1:
+        normalized = f"^{normalized.replace('^', '')}"
+    return normalized
 
 
 def provider_symbol(symbol: str) -> str:
