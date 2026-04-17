@@ -48,9 +48,15 @@ export default function PaperTradingPage() {
   const loading = portfolioSnapshotLoading;
 
   const refreshJob = useJobRunner("paper_signal_refresh", { recentLimit: 6 });
+  const lightweightExperimentMode = Boolean(dashboardLite?.product_scope?.lightweight_experiment_mode);
+  const dlEnabled = Boolean(dashboardLite?.product_scope?.dl_enabled);
 
   const { decision, loading: decisionLoading, error: decisionError, refreshDecision } = useDecisionSurface({
-    symbol: operatorSymbol, startDate: defaultStartDate, endDate: todayIso, enabled: Boolean(operatorSymbol),
+    symbol: operatorSymbol,
+    startDate: defaultStartDate,
+    endDate: todayIso,
+    includeDl: dlEnabled,
+    enabled: Boolean(operatorSymbol),
   });
 
   // Set symbol from URL params or workspace
@@ -79,7 +85,7 @@ export default function PaperTradingPage() {
     setPageError("");
     const watchlistSymbols = focusedSymbols.slice(0, 8) || [operatorSymbol];
     await refreshJob.submit(() => refreshPaperSignals({
-      symbols: watchlistSymbols, mode: "classic",
+      symbols: watchlistSymbols, mode: lightweightExperimentMode ? "ensemble" : "classic",
       start_date: defaultStartDate, end_date: todayIso,
       auto_execute: true, quantity: 1,
     }));

@@ -12,11 +12,13 @@ import SectionHeader from "../components/ui/SectionHeader";
 import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
 import { fetchTrainingDashboard, startTrainingJob } from "../lib/api";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { parseSymbolList, trainingSchema } from "../lib/forms";
 import { t } from "../lib/i18n";
 
 
 export default function ModelLabPage() {
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [dashboard, setDashboard] = useState(null);
   const [lastTrainResult, setLastTrainResult] = useState(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
@@ -32,8 +34,8 @@ export default function ModelLabPage() {
     resolver: zodResolver(trainingSchema),
     defaultValues: {
       symbolsText: "AAPL,MSFT,NVDA,SPY",
-      startDate: "2020-01-01",
-      endDate: "2026-04-02",
+      startDate: defaultStartDate,
+      endDate: todayIso,
       horizonDays: 5,
       runOptuna: false,
     },

@@ -28,6 +28,7 @@ from backend.app.config import (
     ENABLE_AUTONOMOUS_CYCLE,
     AUTO_TRADING_ENABLED,
     AUTO_TRADING_QUANTITY,
+    LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL,
 )
 from backend.app.core.date_defaults import analysis_window_iso, training_window_iso
 from backend.app.core.logging_utils import get_logger, log_event
@@ -311,7 +312,7 @@ def _market_cycle(dry_run: bool = False, preset: str = AUTOMATION_DEFAULT_PRESET
         symbols[:8],
         start_date,
         end_date,
-        include_dl=False,
+        include_dl=LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL,
         include_ensemble=True,
     )
     watchlists = build_dynamic_watchlists(preset=preset)

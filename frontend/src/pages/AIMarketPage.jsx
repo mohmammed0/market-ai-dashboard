@@ -202,11 +202,13 @@ export default function AIMarketPage() {
   const [quotePayload, setQuotePayload] = useState(null);
   const [fundamentals, setFundamentals] = useState(null);
   const [macro, setMacro] = useState(null);
+  const dlEnabled = Boolean(dashboardLite?.product_scope?.dl_enabled);
 
   const { decision, loading: decisionLoading, error: decisionError } = useDecisionSurface({
     symbol,
     startDate: defaultStartDate,
     endDate: todayIso,
+    includeDl: dlEnabled,
     enabled: Boolean(symbol),
   });
 

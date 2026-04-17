@@ -17,6 +17,7 @@ import DecisionPanel from "../components/ui/DecisionPanel";
 import SymbolPicker from "../components/ui/SymbolPicker";
 import useDecisionSurface from "../hooks/useDecisionSurface";
 import { analyzeSymbol, fetchSignalExplanation } from "../lib/api";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { analyzeSchema } from "../lib/forms";
 import { t } from "../lib/i18n";
 
@@ -33,7 +34,7 @@ function formatError(err) {
 
 
 export default function AnalyzePage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [result, setResult] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -42,7 +43,7 @@ export default function AnalyzePage() {
 
   const { control, register, handleSubmit, formState: { errors }, setValue, watch } = useForm({
     resolver: zodResolver(analyzeSchema),
-    defaultValues: { symbol: "AAPL", startDate: "2024-01-01", endDate: todayIso },
+    defaultValues: { symbol: "AAPL", startDate: defaultStartDate, endDate: todayIso },
   });
 
   const watchedSymbol = watch("symbol");
@@ -53,6 +54,7 @@ export default function AnalyzePage() {
     symbol: watchedSymbol,
     startDate: watchedStart,
     endDate: watchedEnd,
+    includeDl: true,
     enabled: Boolean(result),
   });
 

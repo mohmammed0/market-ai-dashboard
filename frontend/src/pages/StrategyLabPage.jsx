@@ -25,6 +25,7 @@ import {
   fetchStrategyLabHistory,
   runStrategyEvaluation,
 } from "../lib/api";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { strategyEvaluationSchema } from "../lib/forms";
 import { t } from "../lib/i18n";
 
@@ -34,7 +35,7 @@ const TAB_KEYS = ["evaluation", "history", "candidates"];
 
 
 export default function StrategyLabPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState(null);
   const [generatedCandidates, setGeneratedCandidates] = useState(null);
@@ -56,7 +57,7 @@ export default function StrategyLabPage() {
     resolver: zodResolver(strategyEvaluationSchema),
     defaultValues: {
       instrument: "AAPL",
-      startDate: "2024-01-01",
+      startDate: defaultStartDate,
       endDate: todayIso,
       holdDays: 10,
       windows: 3,
@@ -75,6 +76,7 @@ export default function StrategyLabPage() {
     symbol: watchedInstrument,
     startDate: watchedStartDate,
     endDate: watchedEndDate,
+    includeDl: true,
     enabled: Boolean(watchedInstrument),
   });
   const generatedCount = generatedCandidates?.latest_candidates?.length ?? 0;

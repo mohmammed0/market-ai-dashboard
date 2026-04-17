@@ -16,6 +16,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
 import useJobRunner from "../hooks/useJobRunner";
 import { runBacktest, runModelBacktest, runVectorbtBacktest } from "../lib/api";
+import { buildRecentDateRange } from "../lib/dateDefaults";
 import { backtestSchema } from "../lib/forms";
 import { t } from "../lib/i18n";
 
@@ -24,7 +25,7 @@ const ACTIVE_JOB_STATUSES = new Set(["pending", "running"]);
 
 
 export default function BacktestPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const { startDate: defaultStartDate, todayIso } = buildRecentDateRange();
   const [result, setResult] = useState(null);
   const [mode, setMode] = useState("classic");
   const jobType = mode === "vectorbt" ? "backtest_vectorbt" : mode === "classic" ? "backtest_classic" : null;
@@ -46,7 +47,7 @@ export default function BacktestPage() {
     resolver: zodResolver(backtestSchema),
     defaultValues: {
       instrument: "AAPL",
-      startDate: "2024-01-01",
+      startDate: defaultStartDate,
       endDate: todayIso,
       holdDays: 10,
       minTechnicalScore: 2,

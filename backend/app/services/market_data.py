@@ -8,6 +8,12 @@ import os
 import pandas as pd
 from sqlalchemy import desc
 
+from backend.app.config import (
+    DEFAULT_SAMPLE_SYMBOLS,
+    DEFAULT_TRACKED_SYMBOL_LIMIT,
+    LIGHTWEIGHT_EXPERIMENT_MAX_SYMBOLS,
+    LIGHTWEIGHT_EXPERIMENT_MODE,
+)
 from backend.app.models import FeatureSnapshot, OhlcvBar, QuoteSnapshot
 from backend.app.services import get_cache
 from backend.app.services.storage import dumps_json, loads_json, session_scope
@@ -42,8 +48,8 @@ def sync_alpaca_credentials_from_runtime() -> None:
     except Exception as exc:
         logger.warning("market_data.alpaca_credentials_sync_failed error=%s", exc)
 
-
-DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "SPY", "QQQ"]
+_DEFAULT_SYMBOL_LIMIT = LIGHTWEIGHT_EXPERIMENT_MAX_SYMBOLS if LIGHTWEIGHT_EXPERIMENT_MODE else DEFAULT_TRACKED_SYMBOL_LIMIT
+DEFAULT_SYMBOLS = DEFAULT_SAMPLE_SYMBOLS[:_DEFAULT_SYMBOL_LIMIT] or ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "SPY", "QQQ"]
 SOURCE_DIR = SOURCE_CACHE_DIR
 logger = logging.getLogger(__name__)
 

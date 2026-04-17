@@ -9,6 +9,7 @@ import logging
 import os
 
 from backend.app.application.broker.service import get_broker_summary
+from backend.app.config import LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL
 from backend.app.core.date_defaults import analysis_window_iso
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.domain.alerts.contracts import AlertRecord
@@ -189,7 +190,8 @@ def _analyze_symbol_payload(
     end_date: str,
     quote_lookup: dict[str, dict] | None = None,
 ) -> dict:
-    result = build_smart_analysis(symbol, start_date, end_date, include_dl=False, include_ensemble=True)
+    include_dl = LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL and str(strategy_mode or "").strip().lower() in {"ensemble", "dl"}
+    result = build_smart_analysis(symbol, start_date, end_date, include_dl=include_dl, include_ensemble=True)
     if "error" in result:
         return {
             "symbol": symbol,

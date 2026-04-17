@@ -2,6 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
+from backend.app.config import LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL
 
 
 class TrainMLRequest(BaseModel):
@@ -32,7 +33,7 @@ class InferenceRequest(BaseModel):
     symbol: str = Field(default="AAPL")
     start_date: str = Field(default_factory=recent_start_date_iso)
     end_date: str = Field(default_factory=recent_end_date_iso)
-    include_dl: bool = Field(default=False)
+    include_dl: bool = Field(default=LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL)
     include_ensemble: bool = Field(default=True)
     run_id: str | None = Field(default=None)
 
@@ -41,7 +42,7 @@ class BatchInferenceRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY"])
     start_date: str = Field(default_factory=recent_start_date_iso)
     end_date: str = Field(default_factory=recent_end_date_iso)
-    include_dl: bool = Field(default=False)
+    include_dl: bool = Field(default=LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL)
     include_ensemble: bool = Field(default=True)
 
 
