@@ -152,7 +152,18 @@ def build_focused_opportunity_snapshot(sample_symbols: list[str]) -> list[dict]:
         return []
     calibration_profile = get_latest_confidence_calibration_profile()
 
-    max_workers = max(1, min(int(os.environ.get("MARKET_AI_ANALYSIS_CONCURRENCY", "2") or 2), 2, len(selected_symbols)))
+    try:
+        cpu_hint = max(2, min(int(os.environ.get("MARKET_AI_CPU_WORKER_HINT", str(os.cpu_count() or 2)) or 2), 8))
+    except Exception:
+        cpu_hint = 4
+    max_workers = max(
+        1,
+        min(
+            int(os.environ.get("MARKET_AI_ANALYSIS_CONCURRENCY", str(cpu_hint)) or cpu_hint),
+            cpu_hint,
+            len(selected_symbols),
+        ),
+    )
 
     def worker(symbol: str) -> dict | None:
         ranked = get_ranked_analysis_result(

@@ -31,6 +31,7 @@ from backend.app.services.continuous_learning import start_continuous_learning
 from backend.app.services.automation_hub import run_automation_job
 from backend.app.services.market_data import DEFAULT_SYMBOLS, fetch_quote_snapshots, incremental_update
 from backend.app.services.news_feed import refresh_news_feed
+from backend.app.services.pipeline_live import record_event
 from backend.app.services.signal_store import refresh_signal_store
 from backend.app.services.storage import session_scope
 
@@ -97,8 +98,22 @@ def _refresh_history_job():
         if errors:
             detail = f"{detail} sample_errors={errors[:3]}"
         _record_job("history_refresh", "completed", detail)
+        record_event(
+            "market_history",
+            stage="completed",
+            message=f"تحديث التاريخ: rows={updated} failed={len(errors)}",
+            level="warning" if errors else "info",
+            details={"updated_rows": updated, "failed_symbols": len(errors)},
+        )
     except Exception as exc:
         _record_job("history_refresh", "error", str(exc))
+        record_event(
+            "market_history",
+            stage="error",
+            message="فشل تحديث بيانات التاريخ",
+            level="error",
+            details={"error": str(exc)[:200]},
+        )
 
 
 def _refresh_quotes_job():
@@ -108,8 +123,26 @@ def _refresh_quotes_job():
         if result.get("errors"):
             detail = f"{detail} sample_errors={result.get('errors', [])[:3]}"
         _record_job("quote_snapshot", "completed", detail)
+        record_event(
+            "quote_snapshot",
+            stage="completed",
+            message=f"تحديث الأسعار اللحظية: count={result.get('count', 0)} failed={result.get('failed_symbols', 0)}",
+            level="warning" if result.get("failed_symbols", 0) else "info",
+            details={
+                "count": result.get("count", 0),
+                "failed_symbols": result.get("failed_symbols", 0),
+                "provider_status": result.get("provider_status"),
+            },
+        )
     except Exception as exc:
         _record_job("quote_snapshot", "error", str(exc))
+        record_event(
+            "quote_snapshot",
+            stage="error",
+            message="فشل تحديث الأسعار اللحظية",
+            level="error",
+            details={"error": str(exc)[:200]},
+        )
 
 
 def _refresh_news_feed_job():

@@ -15,6 +15,11 @@ from backend.app.config import (
 from backend.app.core.date_defaults import recent_end_date_iso, recent_start_date_iso
 from backend.app.services import get_cache
 from backend.app.services.cached_analysis import get_ranked_analysis_result
+from backend.app.services.confidence_calibration import (
+    apply_confidence_calibration_to_analysis,
+    build_and_cache_confidence_calibration_profile,
+)
+from backend.app.services.pipeline_live import complete_cycle, log_cycle_stage, start_cycle
 from backend.app.services.signal_runtime import extract_signal_view
 
 
@@ -41,7 +46,7 @@ def _cache_key(symbol: str) -> str:
     return f"{SIGNAL_STORE_KEY_PREFIX}{str(symbol or '').strip().upper()}"
 
 
-def _build_signal_snapshot(symbol: str, start_date: str, end_date: str) -> dict:
+def _build_signal_snapshot(symbol: str, start_date: str, end_date: str, calibration_profile: dict | None = None) -> dict:
     analysis = get_ranked_analysis_result(
         symbol,
         start_date,
@@ -58,6 +63,8 @@ def _build_signal_snapshot(symbol: str, start_date: str, end_date: str) -> dict:
             "end_date": end_date,
             "error": str(analysis.get("error") or "signal_generation_failed"),
         }
+
+    analysis = apply_confidence_calibration_to_analysis(analysis, calibration_profile)
 
     available_modes = ("classic", "ml", "ensemble") + (("dl",) if LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL else tuple())
     views = {mode: extract_signal_view(analysis, mode=mode) for mode in available_modes}
@@ -76,6 +83,7 @@ def _build_signal_snapshot(symbol: str, start_date: str, end_date: str) -> dict:
         "reason": str(default_view.get("reasoning") or "").strip() or None,
         "price": default_view.get("price"),
         "views": views,
+        "confidence_calibration": analysis.get("confidence_calibration"),
     }
 
 
@@ -87,56 +95,138 @@ def refresh_signal_store(symbols: list[str] | None = None) -> dict:
     start_date = recent_start_date_iso()
     end_date = recent_end_date_iso()
     cache = get_cache()
+    cycle_id = start_cycle(
+        "signal_refresh",
+        symbols=selected_symbols,
+        message=f"بدء تحديث الإشارات لـ {len(selected_symbols)} رموز",
+        details={"start_date": start_date, "end_date": end_date},
+    )
+    log_cycle_stage(cycle_id, stage="calibration", message="بناء/تحميل ملف معايرة الثقة")
     worker_count = max(1, min(SIGNAL_REFRESH_MAX_WORKERS, len(selected_symbols)))
     errors: list[dict] = []
     snapshots: list[dict] = []
 
-    def worker(symbol: str) -> dict:
-        try:
-            return _build_signal_snapshot(symbol, start_date, end_date)
-        except Exception as exc:
-            return {
-                "symbol": symbol,
+    try:
+        calibration_profile = build_and_cache_confidence_calibration_profile(
+            selected_symbols,
+            end_date=end_date,
+            force_refresh=False,
+        )
+        log_cycle_stage(
+            cycle_id,
+            stage="analysis",
+            message=f"تحليل الرموز باستخدام {worker_count} workers",
+            details={"worker_count": worker_count},
+        )
+
+        def worker(symbol: str) -> dict:
+            try:
+                return _build_signal_snapshot(symbol, start_date, end_date, calibration_profile=calibration_profile)
+            except Exception as exc:
+                return {
+                    "symbol": symbol,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "error": str(exc),
+                }
+
+        if worker_count == 1:
+            results = [worker(symbol) for symbol in selected_symbols]
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="signal-store") as executor:
+                results = list(executor.map(worker, selected_symbols))
+
+        processed_count = 0
+        for snapshot in results:
+            symbol = str(snapshot.get("symbol") or "").strip().upper()
+            processed_count += 1
+            if snapshot.get("error"):
+                errors.append({"symbol": symbol, "error": snapshot.get("error")})
+                log_cycle_stage(
+                    cycle_id,
+                    stage="symbol_error",
+                    level="error",
+                    symbol=symbol,
+                    message=f"{symbol}: فشل بناء الإشارة",
+                    details={"error": str(snapshot.get("error") or "")[:200]},
+                    processed_count=processed_count,
+                    failed_count=len(errors),
+                )
+                continue
+            cache.set(_cache_key(symbol), snapshot, ttl_seconds=SIGNAL_CACHE_TTL_SECONDS)
+            snapshots.append(snapshot)
+            log_cycle_stage(
+                cycle_id,
+                stage="symbol_signal",
+                symbol=symbol,
+                message=f"{symbol}: {snapshot.get('action') or snapshot.get('signal') or 'HOLD'} ({float(snapshot.get('confidence') or 0):.1f}%)",
+                details={
+                    "signal": snapshot.get("signal"),
+                    "confidence": snapshot.get("confidence"),
+                },
+                processed_count=processed_count,
+                failed_count=len(errors),
+            )
+
+        cache.set(
+            SIGNAL_STORE_INDEX_KEY,
+            {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "start_date": start_date,
                 "end_date": end_date,
-                "error": str(exc),
-            }
-
-    if worker_count == 1:
-        results = [worker(symbol) for symbol in selected_symbols]
-    else:
-        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="signal-store") as executor:
-            results = list(executor.map(worker, selected_symbols))
-
-    for snapshot in results:
-        symbol = str(snapshot.get("symbol") or "").strip().upper()
-        if snapshot.get("error"):
-            errors.append({"symbol": symbol, "error": snapshot.get("error")})
-            continue
-        cache.set(_cache_key(symbol), snapshot, ttl_seconds=SIGNAL_CACHE_TTL_SECONDS)
-        snapshots.append(snapshot)
-
-    cache.set(
-        SIGNAL_STORE_INDEX_KEY,
-        {
+                "symbols": selected_symbols,
+                "updated": len(snapshots),
+                "errors": errors,
+                "confidence_calibration": {
+                    "status": None if not isinstance(calibration_profile, dict) else calibration_profile.get("status"),
+                    "generated_at": None if not isinstance(calibration_profile, dict) else calibration_profile.get("generated_at"),
+                },
+            },
+            ttl_seconds=SIGNAL_CACHE_TTL_SECONDS,
+        )
+        payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "start_date": start_date,
             "end_date": end_date,
             "symbols": selected_symbols,
             "updated": len(snapshots),
             "errors": errors,
-        },
-        ttl_seconds=SIGNAL_CACHE_TTL_SECONDS,
-    )
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "start_date": start_date,
-        "end_date": end_date,
-        "symbols": selected_symbols,
-        "updated": len(snapshots),
-        "errors": errors,
-    }
+            "confidence_calibration": {
+                "status": None if not isinstance(calibration_profile, dict) else calibration_profile.get("status"),
+                "generated_at": None if not isinstance(calibration_profile, dict) else calibration_profile.get("generated_at"),
+            },
+        }
+        complete_cycle(
+            cycle_id,
+            status="completed",
+            message=f"اكتمل تحديث الإشارات: updated={len(snapshots)} errors={len(errors)}",
+            summary={
+                "symbols": len(selected_symbols),
+                "updated": len(snapshots),
+                "errors": len(errors),
+                "worker_count": worker_count,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+        return payload
+    except Exception as exc:
+        complete_cycle(
+            cycle_id,
+            status="failed",
+            message="فشل تحديث الإشارات",
+            summary={
+                "symbols": len(selected_symbols),
+                "updated": len(snapshots),
+                "errors": len(errors) + 1,
+                "worker_count": worker_count,
+                "error": str(exc)[:240],
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+        raise
 
 
 def get_cached_signal_snapshot(symbol: str) -> dict | None:

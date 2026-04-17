@@ -13,6 +13,7 @@ from backend.app.config import (
     DEFAULT_TRACKED_SYMBOL_LIMIT,
     LIGHTWEIGHT_EXPERIMENT_MAX_SYMBOLS,
     LIGHTWEIGHT_EXPERIMENT_MODE,
+    QUOTE_SNAPSHOT_MAX_WORKERS,
 )
 from backend.app.models import FeatureSnapshot, OhlcvBar, QuoteSnapshot
 from backend.app.services import get_cache
@@ -278,7 +279,7 @@ def fetch_quote_snapshots(symbols: list[str] | None = None, include_profile: boo
     cache_key = _snapshot_cache_key(symbols, include_profile)
 
     def factory():
-        max_workers = max(1, min(len(symbols), 4))
+        max_workers = max(1, min(len(symbols), QUOTE_SNAPSHOT_MAX_WORKERS))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             resolved = list(executor.map(lambda symbol: _fetch_provider_snapshot(symbol, include_profile), symbols))
         snapshots = [item["snapshot"] for item in resolved if item.get("snapshot") is not None]

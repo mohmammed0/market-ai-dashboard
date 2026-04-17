@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.app.core.logging_utils import get_logger, log_event
+from backend.app.services.pipeline_live import complete_cycle, log_cycle_stage, start_cycle
 
 logger = get_logger(__name__)
 
@@ -69,29 +70,72 @@ async def run_smart_cycle(
     started = time.perf_counter()
     cycle_time = datetime.now(timezone.utc).isoformat()
     limit = min(symbol_limit or AUTOMATION_SYMBOL_LIMIT, 20)
+    cycle_id = start_cycle(
+        "smart_cycle",
+        symbols=symbols,
+        message=f"بدء دورة smart_cycle بحد {limit} رموز",
+        details={"symbol_limit": limit},
+    )
 
     log_event(logger, logging.INFO, "smart_cycle.start", symbol_limit=limit)
 
     # Step 1: Get symbols to analyze
     target_symbols = symbols or _get_top_symbols(limit)
+    log_cycle_stage(
+        cycle_id,
+        stage="select_symbols",
+        message=f"اختيار {len(target_symbols)} رموز للتحليل",
+        details={"symbols": target_symbols[:10]},
+    )
     if not target_symbols:
         result = {
             "status": "skipped",
             "reason": "No symbols to analyze",
             "timestamp": cycle_time,
         }
+        complete_cycle(
+            cycle_id,
+            status="completed",
+            message="تم تخطي smart_cycle لعدم وجود رموز",
+            summary={"symbols": 0, "opportunities": 0, "alerts": 0},
+        )
         _last_smart_cycle = result
         return result
 
     # Step 2: Run analysis on each symbol
     analyses = []
-    for symbol in target_symbols[:limit]:
+    for index, symbol in enumerate(target_symbols[:limit], start=1):
         try:
             analysis = _analyze_symbol(symbol)
             if analysis and not analysis.get("error"):
                 analyses.append(analysis)
+                log_cycle_stage(
+                    cycle_id,
+                    stage="symbol_analysis",
+                    symbol=symbol,
+                    message=f"تم تحليل {symbol} بنجاح",
+                    processed_count=index,
+                )
+            else:
+                log_cycle_stage(
+                    cycle_id,
+                    stage="symbol_analysis",
+                    level="warning",
+                    symbol=symbol,
+                    message=f"{symbol}: نتيجة غير صالحة",
+                    processed_count=index,
+                )
         except Exception as exc:
             logger.warning("Smart cycle: analysis failed for %s: %s", symbol, exc)
+            log_cycle_stage(
+                cycle_id,
+                stage="symbol_analysis",
+                level="error",
+                symbol=symbol,
+                message=f"فشل تحليل {symbol}",
+                details={"error": str(exc)[:200]},
+                processed_count=index,
+            )
 
     if not analyses:
         result = {
@@ -100,10 +144,17 @@ async def run_smart_cycle(
             "symbols_attempted": len(target_symbols),
             "timestamp": cycle_time,
         }
+        complete_cycle(
+            cycle_id,
+            status="completed",
+            message="انتهت smart_cycle بدون تحليلات صالحة",
+            summary={"symbols_attempted": len(target_symbols), "opportunities": 0, "alerts": 0},
+        )
         _last_smart_cycle = result
         return result
 
     # Step 3: Identify opportunities (BUY/SELL with decent confidence)
+    log_cycle_stage(cycle_id, stage="rank_opportunities", message="تصنيف الفرص من نتائج التحليل")
     opportunities = []
     for a in analyses:
         signal = str(a.get("signal", "HOLD")).upper()
@@ -125,13 +176,27 @@ async def run_smart_cycle(
 
     # Sort by confidence descending
     opportunities.sort(key=lambda x: x["confidence"], reverse=True)
+    log_cycle_stage(
+        cycle_id,
+        stage="rank_opportunities",
+        message=f"تم استخراج {len(opportunities)} فرص قابلة للتنفيذ",
+        details={"top_symbols": [item.get("symbol") for item in opportunities[:5]]},
+    )
 
     # Step 4: Generate AI summary with Ollama
     ai_summary = None
     if opportunities:
+        log_cycle_stage(cycle_id, stage="llm_summary", message="إنشاء ملخص AI للفرص")
         ai_summary = _generate_ai_summary(opportunities)
+        log_cycle_stage(
+            cycle_id,
+            stage="llm_summary",
+            message="اكتمل ملخص AI",
+            details={"has_summary": bool(ai_summary)},
+        )
 
     # Step 5: Create alerts
+    log_cycle_stage(cycle_id, stage="alerts", message="توليد التنبيهات النهائية")
     new_alerts = []
     for opp in opportunities[:5]:  # Top 5 only
         alert = {
@@ -171,6 +236,17 @@ async def run_smart_cycle(
     _last_smart_cycle = result
     log_event(logger, logging.INFO, "smart_cycle.done",
               analyzed=len(analyses), opportunities=len(opportunities), elapsed_s=elapsed)
+    complete_cycle(
+        cycle_id,
+        status="completed",
+        message=f"اكتملت smart_cycle: analyzed={len(analyses)} opportunities={len(opportunities)} alerts={len(new_alerts)}",
+        summary={
+            "analyzed": len(analyses),
+            "opportunities": len(opportunities),
+            "alerts": len(new_alerts),
+            "elapsed_seconds": elapsed,
+        },
+    )
 
     return result
 

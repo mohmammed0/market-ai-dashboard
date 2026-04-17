@@ -36,9 +36,9 @@ function compactDate(value) {
 
 function signalTone(signal) {
   const normalized = String(signal || "").trim().toUpperCase();
-  if (normalized === "BUY" || normalized === "BULLISH") return "positive";
-  if (normalized === "SELL" || normalized === "BEARISH") return "negative";
-  if (normalized === "HOLD" || normalized === "NEUTRAL") return "warning";
+  if (normalized === "BUY" || normalized === "ADD" || normalized === "BULLISH") return "positive";
+  if (normalized === "SELL" || normalized === "EXIT" || normalized === "BEARISH") return "negative";
+  if (normalized === "TRIM" || normalized === "HOLD" || normalized === "NEUTRAL") return "warning";
   return "neutral";
 }
 
@@ -52,6 +52,23 @@ function statusTone(value) {
 
 function sourceTone(isBroker) {
   return isBroker ? "info" : "warning";
+}
+
+function eventTone(level, stage) {
+  const normalizedLevel = String(level || "").trim().toLowerCase();
+  if (normalizedLevel === "error") return "negative";
+  if (normalizedLevel === "warning" || String(stage || "").toLowerCase().includes("error")) return "warning";
+  if (["completed", "success", "ok"].some((token) => String(stage || "").toLowerCase().includes(token))) return "positive";
+  return "info";
+}
+
+function formatElapsed(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 60) return `${value.toFixed(1)}s`;
+  const minutes = Math.floor(value / 60);
+  const rem = Math.floor(value % 60);
+  return `${minutes}m ${rem}s`;
 }
 
 function IndexCard({ item, onInspect }) {
@@ -138,8 +155,10 @@ function NewsCard({ item, onNavigate }) {
 }
 
 function OpportunityRow({ item, onNavigate }) {
-  const signal = item?.signal || item?.action || item?.stance || "HOLD";
+  const signal = item?.signal || item?.stance || "HOLD";
+  const action = item?.action || signal || "WATCH";
   const confidence = Number(item?.confidence ?? 0);
+  const riskLabel = item?.risk_label || "RANGE";
   const reason = item?.reason || item?.best_setup || item?.setup_type || item?.notes || "فرصة مرتبة من محرك القرار.";
   return (
     <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
@@ -148,8 +167,8 @@ function OpportunityRow({ item, onNavigate }) {
         <p>{reason}</p>
       </div>
       <div className="dashboard-list-meta">
-        <StatusBadge label={signal} tone={signalTone(signal)} dot={false} />
-        <span>{confidence > 0 ? `${confidence.toFixed(0)}%` : compactDate(item?.created_at)}</span>
+        <StatusBadge label={action} tone={signalTone(action)} dot={false} />
+        <span>{confidence > 0 ? `${confidence.toFixed(0)}% | ${riskLabel}` : compactDate(item?.created_at)}</span>
       </div>
     </button>
   );
@@ -174,6 +193,7 @@ function PositionRow({ item, onNavigate }) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { data: dashboardLite, loading, error } = useAppData("dashboardLite");
+  const { data: pipelineLive, loading: pipelineLoading, error: pipelineError } = useAppData("pipelineLive");
 
   const market = dashboardLite?.market_overview || {};
   const portfolioSnapshot = dashboardLite?.portfolio_snapshot || {};
@@ -197,6 +217,9 @@ export default function DashboardPage() {
   const trades = Array.isArray(portfolioSnapshot?.trades) ? portfolioSnapshot.trades : [];
   const opportunityItems = Array.isArray(opportunitiesPayload?.items) ? opportunitiesPayload.items : [];
   const newsItems = Array.isArray(news?.items) ? news.items : [];
+  const pipelineEvents = Array.isArray(pipelineLive?.events) ? pipelineLive.events.slice(0, 12) : [];
+  const pipelineActiveCycles = Array.isArray(pipelineLive?.active_cycles) ? pipelineLive.active_cycles : [];
+  const pipelineStats = pipelineLive?.stats || {};
 
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
   const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
@@ -296,6 +319,69 @@ export default function DashboardPage() {
           />
 
           <div className="command-grid dashboard-grid">
+            <SectionCard
+              className="col-span-12"
+              title="مراقبة التشغيل الحي"
+              description="سجل نصي مباشر لمراحل النظام: جلب البيانات، الأخبار، التحليل، الإشارات، والأتمتة."
+              action={(
+                <StatusBadge
+                  label={pipelineActiveCycles.length ? `${pipelineActiveCycles.length} دورة تعمل` : "Standby"}
+                  tone={pipelineActiveCycles.length ? "accent" : "subtle"}
+                  dot={false}
+                />
+              )}
+            >
+              {pipelineLoading ? (
+                <LoadingSkeleton lines={4} />
+              ) : (
+                <>
+                  <SummaryStrip
+                    compact
+                    items={[
+                      { label: "الدورات النشطة", value: pipelineActiveCycles.length },
+                      { label: "إجمالي الدورات", value: Number(pipelineStats?.total_cycles ?? 0) },
+                      { label: "مكتملة", value: Number(pipelineStats?.completed_cycles ?? 0) },
+                      { label: "فاشلة", value: Number(pipelineStats?.failed_cycles ?? 0) },
+                    ]}
+                  />
+                  {pipelineActiveCycles.length ? (
+                    <div className="dashboard-feed-list">
+                      {pipelineActiveCycles.slice(0, 4).map((cycle) => (
+                        <div className="dashboard-feed-item" key={cycle.id}>
+                          <div className="dashboard-feed-copy">
+                            <strong>{cycle.component || "pipeline"} · {cycle.stage || "running"}</strong>
+                            <p>
+                              {cycle.symbol_count ? `symbols ${cycle.processed_count ?? 0}/${cycle.symbol_count}` : "general cycle"}
+                              {cycle.failed_count ? ` · failed ${cycle.failed_count}` : ""}
+                            </p>
+                          </div>
+                          <StatusBadge label={formatElapsed(cycle.elapsed_seconds)} tone="info" dot={false} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {pipelineEvents.length ? (
+                    <div className="dashboard-feed-list">
+                      {pipelineEvents.map((event) => (
+                        <div className="dashboard-feed-item" key={event.id}>
+                          <div className="dashboard-feed-copy">
+                            <strong>{event.message || "pipeline update"}</strong>
+                            <p>
+                              {event.component || "pipeline"} · {event.stage || "update"}
+                              {event.symbol ? ` · ${event.symbol}` : ""}
+                            </p>
+                          </div>
+                          <StatusBadge label={compactDate(event.at)} tone={eventTone(event.level, event.stage)} dot={false} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState title="لا يوجد سجل حي بعد" description={pipelineError || "سيظهر هنا تسلسل التشغيل النصي عند بدء دورة التحليل."} />
+                  )}
+                </>
+              )}
+            </SectionCard>
+
             <SectionCard
               className="col-span-7"
               title="لوحة السوق"

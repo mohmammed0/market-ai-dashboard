@@ -8,6 +8,7 @@ from sqlalchemy import and_, or_
 from backend.app.config import DEFAULT_SAMPLE_SYMBOLS
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.models.market import NewsRecord
+from backend.app.services.pipeline_live import complete_cycle, log_cycle_stage, start_cycle
 from backend.app.services.storage import session_scope
 from news_intelligence import classify_news_item, headline_signature
 from news_engine import fetch_news
@@ -93,61 +94,103 @@ def refresh_news_feed(symbols: Iterable[str] | None = None, *, per_symbol_limit:
     fetched = 0
     errors: list[dict] = []
     per_symbol: list[dict] = []
+    cycle_id = start_cycle(
+        "news_refresh",
+        symbols=normalized_symbols,
+        message=f"بدء دورة الأخبار لـ {len(normalized_symbols)} رموز",
+        details={"per_symbol_limit": int(per_symbol_limit)},
+    )
+    processed_count = 0
 
-    with session_scope() as session:
-        batch_signatures: set[tuple] = set()
-        for symbol in normalized_symbols:
-            try:
-                payload = fetch_news(symbol, limit=per_symbol_limit)
-            except Exception as exc:
-                errors.append({"symbol": symbol, "error": " ".join(str(exc).split()) or exc.__class__.__name__})
-                continue
-
-            items = list(payload.get("news_items") or [])
-            fetched += len(items)
-            existing_signatures = _existing_signatures_for_symbol(session, symbol, items)
-            symbol_inserted = 0
-            symbol_skipped = 0
-
-            for item in items:
-                signature = _item_signature(symbol, item)
-                if signature in existing_signatures or signature in batch_signatures:
-                    skipped += 1
-                    symbol_skipped += 1
+    try:
+        with session_scope() as session:
+            batch_signatures: set[tuple] = set()
+            for symbol in normalized_symbols:
+                processed_count += 1
+                try:
+                    payload = fetch_news(symbol, limit=per_symbol_limit)
+                except Exception as exc:
+                    error_text = " ".join(str(exc).split()) or exc.__class__.__name__
+                    errors.append({"symbol": symbol, "error": error_text})
+                    log_cycle_stage(
+                        cycle_id,
+                        stage="fetch_error",
+                        level="error",
+                        symbol=symbol,
+                        message=f"فشل جلب الأخبار لـ {symbol}",
+                        details={"error": error_text},
+                        processed_count=processed_count,
+                        failed_count=len(errors),
+                    )
                     continue
 
-                row = NewsRecord(
-                    instrument=symbol,
-                    title=_as_text(item.get("title")),
-                    source=_as_text(item.get("source")),
-                    published=_as_text(item.get("published")),
-                    sentiment=_as_text(item.get("sentiment")),
-                    score=item.get("score", item.get("news_score")),
-                    url=_as_text(item.get("url") or item.get("link")),
-                )
-                session.add(row)
-                inserted += 1
-                symbol_inserted += 1
-                batch_signatures.add(signature)
+                items = list(payload.get("news_items") or [])
+                fetched += len(items)
+                existing_signatures = _existing_signatures_for_symbol(session, symbol, items)
+                symbol_inserted = 0
+                symbol_skipped = 0
 
-            per_symbol.append(
-                {
-                    "symbol": symbol,
-                    "fetched": len(items),
-                    "inserted": symbol_inserted,
-                    "skipped": symbol_skipped,
-                    "overall_sentiment": payload.get("news_sentiment"),
-                    "top_events": [
-                        {
-                            "title": row.get("title"),
-                            "event_type": row.get("event_type"),
-                            "impact_score": row.get("impact_score"),
-                            "sentiment": row.get("sentiment"),
-                        }
-                        for row in items[:3]
-                    ],
-                }
-            )
+                for item in items:
+                    signature = _item_signature(symbol, item)
+                    if signature in existing_signatures or signature in batch_signatures:
+                        skipped += 1
+                        symbol_skipped += 1
+                        continue
+
+                    row = NewsRecord(
+                        instrument=symbol,
+                        title=_as_text(item.get("title")),
+                        source=_as_text(item.get("source")),
+                        published=_as_text(item.get("published")),
+                        sentiment=_as_text(item.get("sentiment")),
+                        score=item.get("score", item.get("news_score")),
+                        url=_as_text(item.get("url") or item.get("link")),
+                    )
+                    session.add(row)
+                    inserted += 1
+                    symbol_inserted += 1
+                    batch_signatures.add(signature)
+
+                per_symbol.append(
+                    {
+                        "symbol": symbol,
+                        "fetched": len(items),
+                        "inserted": symbol_inserted,
+                        "skipped": symbol_skipped,
+                        "overall_sentiment": payload.get("news_sentiment"),
+                        "top_events": [
+                            {
+                                "title": row.get("title"),
+                                "event_type": row.get("event_type"),
+                                "impact_score": row.get("impact_score"),
+                                "sentiment": row.get("sentiment"),
+                            }
+                            for row in items[:3]
+                        ],
+                    }
+                )
+                log_cycle_stage(
+                    cycle_id,
+                    stage="symbol_news",
+                    message=f"{symbol}: fetched={len(items)} inserted={symbol_inserted} skipped={symbol_skipped}",
+                    symbol=symbol,
+                    details={
+                        "fetched": len(items),
+                        "inserted": symbol_inserted,
+                        "skipped": symbol_skipped,
+                    },
+                    processed_count=processed_count,
+                    failed_count=len(errors),
+                )
+    except Exception as exc:
+        error_text = " ".join(str(exc).split()) or exc.__class__.__name__
+        complete_cycle(
+            cycle_id,
+            status="failed",
+            message="انتهت دورة الأخبار بفشل",
+            summary={"error": error_text, "processed_count": processed_count, "failed_count": len(errors)},
+        )
+        raise
 
     log_event(
         logger,
@@ -160,7 +203,7 @@ def refresh_news_feed(symbols: Iterable[str] | None = None, *, per_symbol_limit:
         skipped=skipped,
         errors=len(errors),
     )
-    return {
+    payload = {
         "symbols": normalized_symbols,
         "per_symbol_limit": per_symbol_limit,
         "fetched": fetched,
@@ -169,6 +212,19 @@ def refresh_news_feed(symbols: Iterable[str] | None = None, *, per_symbol_limit:
         "errors": errors,
         "items_by_symbol": per_symbol,
     }
+    complete_cycle(
+        cycle_id,
+        status="completed",
+        message=f"اكتملت دورة الأخبار: fetched={fetched} inserted={inserted} errors={len(errors)}",
+        summary={
+            "symbols": len(normalized_symbols),
+            "fetched": fetched,
+            "inserted": inserted,
+            "skipped": skipped,
+            "errors": len(errors),
+        },
+    )
+    return payload
 
 
 def serialize_news_record(row: NewsRecord) -> dict:
