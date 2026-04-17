@@ -25,6 +25,18 @@ const CHART_STYLES = [
   { key: "8", label: "Heikin Ashi" },
 ];
 
+function normalizeSymbolInput(value) {
+  let normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  if (normalized.endsWith("^") && !normalized.startsWith("^")) {
+    normalized = `^${normalized.slice(0, -1)}`;
+  }
+  if (normalized.startsWith("^") && normalized.split("^").length > 2) {
+    normalized = `^${normalized.replaceAll("^", "")}`;
+  }
+  return normalized;
+}
+
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
   return `$${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -213,12 +225,12 @@ export default function AIMarketPage() {
   });
 
   useEffect(() => {
-    const querySymbol = String(searchParams.get("symbol") || "").trim().toUpperCase();
+    const querySymbol = normalizeSymbolInput(searchParams.get("symbol"));
     if (querySymbol) {
       setSymbol(querySymbol);
       return;
     }
-    const workspaceSymbol = String(workspace?.active_symbol || activeWatchlist?.symbols?.[0] || "AAPL").trim().toUpperCase();
+    const workspaceSymbol = normalizeSymbolInput(workspace?.active_symbol || activeWatchlist?.symbols?.[0] || "AAPL");
     setSymbol(workspaceSymbol || "AAPL");
   }, [searchParams, workspace?.active_symbol, activeWatchlist?.symbols]);
 
@@ -269,7 +281,7 @@ export default function AIMarketPage() {
       ...scopedSymbols,
     ];
     return values.filter((item) => {
-      const normalized = String(item || "").trim().toUpperCase();
+      const normalized = normalizeSymbolInput(item);
       if (!normalized || seen.has(normalized)) return false;
       seen.add(normalized);
       return true;
@@ -277,7 +289,7 @@ export default function AIMarketPage() {
   }, [symbol, favoriteSymbols, activeWatchlist?.symbols, dashboardLite]);
 
   function updateSymbol(next) {
-    const normalized = String(next?.symbol || next || "").trim().toUpperCase();
+    const normalized = normalizeSymbolInput(next?.symbol || next);
     if (!normalized) return;
     setSymbol(normalized);
     const params = new URLSearchParams(searchParams);

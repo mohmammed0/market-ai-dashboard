@@ -18,6 +18,7 @@ from backend.app.services.cached_analysis import get_ranked_analysis_result
 from backend.app.services.confidence_calibration import (
     apply_confidence_calibration_to_analysis,
     build_and_cache_confidence_calibration_profile,
+    get_latest_confidence_calibration_profile,
 )
 from backend.app.services.pipeline_live import complete_cycle, log_cycle_stage, start_cycle
 from backend.app.services.signal_runtime import extract_signal_view
@@ -34,7 +35,7 @@ def _normalized_sample_symbols(symbols: list[str] | None = None) -> list[str]:
     prepared: list[str] = []
     seen: set[str] = set()
     for raw in source:
-        symbol = str(raw or "").strip().upper()
+        symbol = normalize_signal_symbol(raw)
         if not symbol or symbol in seen:
             continue
         prepared.append(symbol)
@@ -42,11 +43,23 @@ def _normalized_sample_symbols(symbols: list[str] | None = None) -> list[str]:
     return prepared[:sample_limit]
 
 
+def normalize_signal_symbol(symbol: str | None) -> str:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return ""
+    if normalized.endswith("^") and not normalized.startswith("^"):
+        normalized = f"^{normalized[:-1]}"
+    if normalized.startswith("^") and normalized.count("^") > 1:
+        normalized = f"^{normalized.replace('^', '')}"
+    return normalized
+
+
 def _cache_key(symbol: str) -> str:
-    return f"{SIGNAL_STORE_KEY_PREFIX}{str(symbol or '').strip().upper()}"
+    return f"{SIGNAL_STORE_KEY_PREFIX}{normalize_signal_symbol(symbol)}"
 
 
 def _build_signal_snapshot(symbol: str, start_date: str, end_date: str, calibration_profile: dict | None = None) -> dict:
+    symbol = normalize_signal_symbol(symbol)
     analysis = get_ranked_analysis_result(
         symbol,
         start_date,
@@ -245,7 +258,7 @@ def get_cached_signal_view(symbol: str, mode: str = "ensemble") -> dict | None:
         return None
 
     return {
-        "symbol": str(snapshot.get("symbol") or symbol).strip().upper(),
+        "symbol": normalize_signal_symbol(str(snapshot.get("symbol") or symbol).strip().upper()),
         "mode": requested_mode,
         "generated_at": snapshot.get("generated_at"),
         "start_date": snapshot.get("start_date"),
@@ -255,3 +268,46 @@ def get_cached_signal_view(symbol: str, mode: str = "ensemble") -> dict | None:
         "price": selected_view.get("price"),
         "reasoning": str(selected_view.get("reasoning") or "").strip() or None,
     }
+
+
+def warm_signal_cache_for_symbol(symbol: str) -> dict | None:
+    normalized_symbol = normalize_signal_symbol(symbol)
+    if not normalized_symbol:
+        return None
+
+    cached = get_cached_signal_snapshot(normalized_symbol)
+    if isinstance(cached, dict) and not cached.get("error"):
+        return cached
+
+    start_date = recent_start_date_iso()
+    end_date = recent_end_date_iso()
+    calibration_profile = get_latest_confidence_calibration_profile()
+    snapshot = _build_signal_snapshot(
+        normalized_symbol,
+        start_date,
+        end_date,
+        calibration_profile=calibration_profile,
+    )
+    if snapshot.get("error"):
+        return None
+
+    cache = get_cache()
+    cache.set(_cache_key(normalized_symbol), snapshot, ttl_seconds=SIGNAL_CACHE_TTL_SECONDS)
+    index_payload = cache.get(SIGNAL_STORE_INDEX_KEY) or {}
+    existing_symbols = [normalize_signal_symbol(item) for item in (index_payload.get("symbols") or []) if str(item).strip()]
+    if normalized_symbol not in existing_symbols:
+        existing_symbols.append(normalized_symbol)
+    cache.set(
+        SIGNAL_STORE_INDEX_KEY,
+        {
+            **index_payload,
+            "generated_at": index_payload.get("generated_at") or snapshot.get("generated_at"),
+            "start_date": index_payload.get("start_date") or start_date,
+            "end_date": index_payload.get("end_date") or end_date,
+            "symbols": existing_symbols,
+            "updated": int(index_payload.get("updated") or 0) + 1,
+            "errors": index_payload.get("errors") or [],
+        },
+        ttl_seconds=SIGNAL_CACHE_TTL_SECONDS,
+    )
+    return snapshot

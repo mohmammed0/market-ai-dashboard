@@ -27,7 +27,11 @@ from backend.app.services.decision_support import build_decision_payload
 from backend.app.services.explainability import build_signal_explanation
 from backend.app.services.job_workflows import run_batch_inference_workflow
 from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
-from backend.app.services.signal_store import get_cached_signal_view
+from backend.app.services.signal_store import (
+    get_cached_signal_view,
+    normalize_signal_symbol,
+    warm_signal_cache_for_symbol,
+)
 from backend.app.services.tool_gateway import get_tool_gateway
 from core.backtest_service import backtest_symbol_enhanced, run_vectorbt_backtest
 
@@ -147,8 +151,14 @@ def signal_surface(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
 ):
-    resolved_symbol = str(symbol or "").strip().upper()
+    resolved_symbol = normalize_signal_symbol(symbol)
+    if not resolved_symbol:
+        raise HTTPException(status_code=422, detail="Symbol is required.")
     cached_signal = get_cached_signal_view(resolved_symbol, mode=mode)
+    if cached_signal is None:
+        warmed = warm_signal_cache_for_symbol(resolved_symbol)
+        if warmed is not None:
+            cached_signal = get_cached_signal_view(resolved_symbol, mode=mode)
     if cached_signal is None:
         raise HTTPException(
             status_code=503,

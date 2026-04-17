@@ -203,11 +203,42 @@ class ApiContractsTests(unittest.TestCase):
         get_cached_signal_view.assert_called_once_with("AAPL", mode="ensemble")
 
     def test_signal_surface_returns_503_when_cache_is_missing(self):
-        with patch("backend.app.api.routes.intelligence.get_cached_signal_view", return_value=None):
+        with patch("backend.app.api.routes.intelligence.get_cached_signal_view", return_value=None), patch(
+            "backend.app.api.routes.intelligence.warm_signal_cache_for_symbol",
+            return_value=None,
+        ) as warm_signal_cache_for_symbol:
             response = self.client.get("/api/intelligence/signal/AAPL")
 
         self.assertEqual(response.status_code, 503, response.text)
         self.assertIn("Signal cache is not ready", response.text)
+        warm_signal_cache_for_symbol.assert_called_once_with("AAPL")
+
+    def test_signal_surface_warms_cache_when_symbol_is_missing(self):
+        fake_signal = {
+            "symbol": "AAPL",
+            "mode": "ensemble",
+            "signal": "BUY",
+            "confidence": 77.0,
+            "price": 181.5,
+            "reasoning": "warmed signal",
+            "start_date": "2026-03-18",
+            "end_date": "2026-04-17",
+        }
+        with patch(
+            "backend.app.api.routes.intelligence.get_cached_signal_view",
+            side_effect=[None, fake_signal],
+        ) as get_cached_signal_view, patch(
+            "backend.app.api.routes.intelligence.warm_signal_cache_for_symbol",
+            return_value={"symbol": "AAPL"},
+        ) as warm_signal_cache_for_symbol:
+            response = self.client.get("/api/intelligence/signal/AAPL")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["signal"], "BUY")
+        self.assertEqual(payload["confidence"], 77.0)
+        self.assertEqual(get_cached_signal_view.call_count, 2)
+        warm_signal_cache_for_symbol.assert_called_once_with("AAPL")
 
     def test_portfolio_snapshot_prefers_internal_when_broker_is_connected_but_internal_book_remains_active(self):
         canonical_snapshot = PortfolioSnapshot(
