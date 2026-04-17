@@ -280,7 +280,8 @@ def get_dashboard_lite() -> DashboardLiteResponse:
             telegram={},
         ).model_dump(mode="json")
 
-    cached_payload = cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=120)
+    lite_ttl_seconds = 900 if LIGHTWEIGHT_EXPERIMENT_MODE else 120
+    cached_payload = cache.get_or_set("dashboard:lite", build_payload, ttl_seconds=lite_ttl_seconds)
     return DashboardLiteResponse.model_validate(cached_payload)
 
 
