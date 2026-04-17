@@ -176,7 +176,7 @@ MODEL_PROMOTION_MIN_TEST_ACCURACY = float(os.getenv("MARKET_AI_MODEL_PROMOTION_M
 MODEL_PROMOTION_MAX_DRAWDOWN_PCT = float(os.getenv("MARKET_AI_MODEL_PROMOTION_MAX_DRAWDOWN_PCT", "35"))
 DEFAULT_SAMPLE_SYMBOLS = [
     symbol.strip().upper()
-    for symbol in os.getenv("MARKET_AI_SAMPLE_SYMBOLS", "AAPL,MSFT,NVDA,AMZN,GOOGL,META,SPY,QQQ").split(",")
+    for symbol in os.getenv("MARKET_AI_SAMPLE_SYMBOLS", "AAPL,MSFT,NVDA,AMZN,GOOGL,META").split(",")
     if symbol.strip()
 ]
 DEFAULT_INDEX_SYMBOLS = [
