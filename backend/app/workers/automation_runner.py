@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import time
+import threading
 
 from backend.app.config import LOG_LEVEL
 from backend.app.core.logging_utils import configure_logging
 from backend.app.db.session import init_db
 from backend.app.services.continuous_learning import start_continuous_learning
 from backend.app.services.scheduler_runtime import start_scheduler
+from backend.app.services.signal_store import refresh_signal_store
+
+
+def _warm_signal_store_background() -> None:
+    try:
+        refresh_signal_store()
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -27,6 +36,11 @@ def main() -> int:
     except Exception:
         pass
     scheduler_status = start_scheduler()
+    if scheduler_status.get("running"):
+        try:
+            threading.Thread(target=_warm_signal_store_background, name="signal-store-warmup", daemon=True).start()
+        except Exception:
+            pass
     learning_status = {"enabled": False, "accepted": False, "state": {}}
     if not scheduler_status.get("running"):
         learning_status = start_continuous_learning(requested_by="automation_runner")

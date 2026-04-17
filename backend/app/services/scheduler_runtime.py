@@ -18,6 +18,7 @@ from backend.app.config import (
     NEWS_REFRESH_MINUTES,
     NEWS_REFRESH_PER_SYMBOL_LIMIT,
     RETRAIN_CYCLE_HOURS,
+    SIGNAL_REFRESH_MINUTES,
     SCHEDULER_ROLE_ALLOWED,
     SCHEDULER_RUNNER_ROLE,
     SERVER_ROLE,
@@ -30,6 +31,7 @@ from backend.app.services.continuous_learning import start_continuous_learning
 from backend.app.services.automation_hub import run_automation_job
 from backend.app.services.market_data import DEFAULT_SYMBOLS, fetch_quote_snapshots, incremental_update
 from backend.app.services.news_feed import refresh_news_feed
+from backend.app.services.signal_store import refresh_signal_store
 from backend.app.services.storage import session_scope
 
 try:
@@ -123,6 +125,19 @@ def _refresh_news_feed_job():
         _record_job("news_refresh", "completed", detail)
     except Exception as exc:
         _record_job("news_refresh", "error", str(exc))
+
+
+def _refresh_signal_store_job():
+    try:
+        result = refresh_signal_store()
+        detail = (
+            f"symbols={len(result.get('symbols', []) or [])} "
+            f"updated={result.get('updated', 0)} "
+            f"errors={len(result.get('errors', []) or [])}"
+        )
+        _record_job("signal_refresh", "completed", detail)
+    except Exception as exc:
+        _record_job("signal_refresh", "error", str(exc))
 
 
 def _run_automation_job(job_name):
@@ -270,6 +285,7 @@ def start_scheduler():
         _scheduler.add_job(_refresh_history_job, "interval", minutes=history_refresh_minutes, id="history_refresh", replace_existing=True)
         _scheduler.add_job(_refresh_quotes_job, "interval", minutes=2, id="quote_snapshot", replace_existing=True)
         _scheduler.add_job(_refresh_news_feed_job, "interval", minutes=NEWS_REFRESH_MINUTES, id="news_refresh", replace_existing=True)
+        _scheduler.add_job(_refresh_signal_store_job, "interval", minutes=SIGNAL_REFRESH_MINUTES, id="signal_refresh", replace_existing=True)
         _scheduler.add_job(_maintenance_reconcile_job, "interval", seconds=120, id="maintenance_reconcile", replace_existing=True)
         if not FOCUSED_PRODUCT_MODE:
             _scheduler.add_job(lambda: _run_automation_job("market_cycle"), "interval", minutes=MARKET_CYCLE_MINUTES, id="market_cycle", replace_existing=True)

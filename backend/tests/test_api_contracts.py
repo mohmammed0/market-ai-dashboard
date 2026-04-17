@@ -177,22 +177,37 @@ class ApiContractsTests(unittest.TestCase):
         self.assertIn("lightweight_experiment_mode", payload["product_scope"])
 
     def test_signal_surface_uses_experiment_dl_flag(self):
-        fake_analysis = {
+        fake_signal = {
+            "symbol": "AAPL",
+            "mode": "ensemble",
             "signal": "BUY",
-            "enhanced_signal": "BUY",
-            "confidence": 72,
-            "close": 180.5,
-            "ensemble_output": {"signal": "BUY", "confidence": 78},
+            "confidence": 78.0,
+            "price": 180.5,
+            "reasoning": "cached signal",
+            "start_date": "2026-03-18",
+            "end_date": "2026-04-17",
         }
-        with patch("backend.app.api.routes.intelligence.LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL", True), patch(
+        with patch(
+            "backend.app.api.routes.intelligence.get_cached_signal_view",
+            return_value=fake_signal,
+        ) as get_cached_signal_view, patch(
             "backend.app.api.routes.intelligence.build_smart_analysis",
-            return_value=fake_analysis,
-        ) as build_smart_analysis:
+            side_effect=AssertionError("signal route should not run heavy analysis"),
+        ):
             response = self.client.get("/api/intelligence/signal/AAPL")
 
         self.assertEqual(response.status_code, 200, response.text)
-        build_smart_analysis.assert_called_once()
-        self.assertTrue(build_smart_analysis.call_args.kwargs["include_dl"])
+        payload = response.json()
+        self.assertEqual(payload["signal"], "BUY")
+        self.assertEqual(payload["confidence"], 78.0)
+        get_cached_signal_view.assert_called_once_with("AAPL", mode="ensemble")
+
+    def test_signal_surface_returns_503_when_cache_is_missing(self):
+        with patch("backend.app.api.routes.intelligence.get_cached_signal_view", return_value=None):
+            response = self.client.get("/api/intelligence/signal/AAPL")
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertIn("Signal cache is not ready", response.text)
 
     def test_portfolio_snapshot_prefers_internal_when_broker_is_connected_but_internal_book_remains_active(self):
         canonical_snapshot = PortfolioSnapshot(

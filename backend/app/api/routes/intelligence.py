@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.app.api.error_handling import raise_for_error_payload
 from backend.app.api.job_submission import start_training_job_or_raise, submit_background_job_or_raise
@@ -27,6 +27,7 @@ from backend.app.services.decision_support import build_decision_payload
 from backend.app.services.explainability import build_signal_explanation
 from backend.app.services.job_workflows import run_batch_inference_workflow
 from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
+from backend.app.services.signal_store import get_cached_signal_view
 from backend.app.services.tool_gateway import get_tool_gateway
 from core.backtest_service import backtest_symbol_enhanced, run_vectorbt_backtest
 
@@ -147,17 +148,13 @@ def signal_surface(
     end_date: str | None = Query(default=None),
 ):
     resolved_symbol = str(symbol or "").strip().upper()
-    resolved_start_date = start_date or recent_start_date_iso()
-    resolved_end_date = end_date or recent_end_date_iso()
-    analysis = build_smart_analysis(
-        resolved_symbol,
-        resolved_start_date,
-        resolved_end_date,
-        include_dl=LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL,
-        include_ensemble=True,
-    )
-    analysis = raise_for_error_payload(analysis, default_status=503)
-    signal_view = extract_signal_view(analysis, mode=mode)
+    cached_signal = get_cached_signal_view(resolved_symbol, mode=mode)
+    if cached_signal is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Signal cache is not ready for this symbol yet. Wait for the background refresh cycle.",
+        )
+    signal_view = cached_signal
     return SymbolSignalResponse(
         symbol=resolved_symbol,
         mode=str(signal_view.get("mode") or mode or "ensemble"),
@@ -166,8 +163,8 @@ def signal_surface(
         score=_confidence_to_score(signal_view.get("confidence")),
         price=signal_view.get("price"),
         reasoning=str(signal_view.get("reasoning") or "").strip() or None,
-        start_date=resolved_start_date,
-        end_date=resolved_end_date,
+        start_date=str(signal_view.get("start_date") or start_date or recent_start_date_iso()),
+        end_date=str(signal_view.get("end_date") or end_date or recent_end_date_iso()),
     )
 
 
