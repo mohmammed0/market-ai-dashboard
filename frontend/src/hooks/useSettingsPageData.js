@@ -13,7 +13,56 @@ import {
 
 
 function resolveSchedulerState(payload) {
-  return payload?.runtime_state || (payload?.scheduler_running ? "running" : payload?.scheduler_enabled ? "idle" : "disabled");
+  const runtimeState = payload?.runtime_state;
+  if (runtimeState === "delegated") {
+    return isSchedulerActiveViaOwner(payload) ? "running" : "delegated";
+  }
+  if (runtimeState === "blocked" && isSchedulerActiveViaOwner(payload)) {
+    return "running";
+  }
+  if (isSchedulerDelegated(payload)) {
+    return isSchedulerActiveViaOwner(payload) ? "running" : "delegated";
+  }
+  return runtimeState || (payload?.scheduler_running ? "running" : payload?.scheduler_enabled ? "idle" : "disabled");
+}
+
+function isSchedulerDelegated(payload) {
+  if (!payload) return false;
+  if (payload?.runtime_state === "delegated" || payload?.delegated === true) return true;
+  return Boolean(payload?.scheduler_enabled && !payload?.scheduler_role_allowed);
+}
+
+function latestSchedulerRunAgeMs(payload) {
+  const recentRuns = Array.isArray(payload?.recent_runs) ? payload.recent_runs : [];
+  const latestRun = recentRuns.find((item) => item?.ran_at)?.ran_at;
+  if (!latestRun) return null;
+  const ageMs = Date.now() - Date.parse(latestRun);
+  return Number.isFinite(ageMs) && ageMs >= 0 ? ageMs : null;
+}
+
+function isSchedulerActiveViaOwner(payload) {
+  if (!isSchedulerDelegated(payload)) return false;
+  const ageMs = latestSchedulerRunAgeMs(payload);
+  if (ageMs === null) return false;
+  return ageMs <= 45 * 60 * 1000;
+}
+
+function resolveSchedulerDetail(payload) {
+  if (!payload) return "Checking scheduler...";
+  if (isSchedulerDelegated(payload) && isSchedulerActiveViaOwner(payload)) {
+    const ownerRole = payload?.scheduler_runner_role || "automation";
+    return `الجدولة تعمل عبر دور ${ownerRole}`;
+  }
+  if (isSchedulerDelegated(payload)) {
+    const ownerRole = payload?.scheduler_runner_role || "automation";
+    const ageMs = latestSchedulerRunAgeMs(payload);
+    if (ageMs !== null) {
+      const ageMinutes = Math.max(0, Math.round(ageMs / 60000));
+      return `الجدولة مملوكة لدور ${ownerRole} (آخر تشغيل قبل ${ageMinutes} دقيقة)`;
+    }
+    return `الجدولة مملوكة لدور ${ownerRole}`;
+  }
+  return payload?.blocked_reason || `Jobs: ${payload?.jobs_count ?? 0}`;
 }
 
 
@@ -77,7 +126,7 @@ export default function useSettingsPageData() {
       setRuntimeStatus({
         model: intelligenceData.ml_ready || intelligenceData.dl_ready ? "ready" : "inactive",
         scheduler: resolveSchedulerState(schedulerData),
-        schedulerDetail: schedulerData.blocked_reason || `Jobs: ${schedulerData.jobs_count ?? 0}`,
+        schedulerDetail: resolveSchedulerDetail(schedulerData),
         ai: aiData.effective_status || "checking",
         aiDetail: aiData.effective_provider ? `Provider: ${aiData.effective_provider}` : "AI status unavailable",
         broker: resolveBrokerState(brokerData),

@@ -23,10 +23,46 @@ import {
 
 function toneForState(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  if (["ready", "ok", "connected", "running"].includes(normalized)) return "positive";
+  if (["ready", "ok", "connected", "running", "delegated"].includes(normalized)) return "positive";
   if (["warning", "degraded", "disabled", "standby"].includes(normalized)) return "warning";
   if (["error", "failed"].includes(normalized)) return "negative";
   return "neutral";
+}
+
+
+const AUTO_TRADING_STRATEGY_OPTIONS = [
+  { value: "classic", label: "Classic Ranking" },
+  { value: "ml", label: "ML Model" },
+  { value: "dl", label: "DL Sequence" },
+  { value: "ensemble", label: "Ensemble" },
+];
+
+const AUTO_TRADING_DIRECTION_OPTIONS = [
+  { value: "both", label: "Long + Short" },
+  { value: "long_only", label: "Long Only" },
+  { value: "short_only", label: "Short Only" },
+];
+
+const AUTO_TRADING_UNIVERSE_OPTIONS = [
+  { value: "FOCUSED_SAMPLE", label: "Focused Sample" },
+  { value: "TOP_500_MARKET_CAP", label: "Top 500 Market Cap" },
+  { value: "NASDAQ", label: "NASDAQ" },
+  { value: "NYSE", label: "NYSE" },
+  { value: "ETF_ONLY", label: "ETF Only" },
+  { value: "ALL_US_EQUITIES", label: "All US Equities" },
+];
+
+
+function coerceNumber(value, fallback = 0) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" && value.trim() === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+
+function labelForOption(options, value, fallback = "-") {
+  return options.find((option) => option.value === value)?.label || fallback;
 }
 
 
@@ -42,7 +78,28 @@ export default function SettingsPage() {
   const [alpacaMsg, setAlpacaMsg] = useState("");
   const [savingAlpaca, setSavingAlpaca] = useState(false);
   const [testingAlpaca, setTestingAlpaca] = useState(false);
-  const [alpacaForm, setAlpacaForm] = useState({ enabled: false, paper: true, tradingMode: "cash", apiKey: "", secretKey: "", urlOverride: "", autoTrading: false, orderSubmission: false, cycleMinutes: 30 });
+  const [alpacaForm, setAlpacaForm] = useState({
+    enabled: false,
+    paper: true,
+    tradingMode: "cash",
+    apiKey: "",
+    secretKey: "",
+    urlOverride: "",
+    autoTrading: false,
+    orderSubmission: false,
+    cycleMinutes: 30,
+    strategyMode: "classic",
+    tradeDirection: "both",
+    universePreset: "FOCUSED_SAMPLE",
+    symbolLimit: 10,
+    useFullPortfolio: false,
+    analysisLookbackDays: 0,
+    notionalPerTrade: 0,
+    quantity: 1,
+    minSignalConfidence: 59,
+    minEnsembleScore: 0.18,
+    minAgreement: 0.25,
+  });
 
   // Telegram state
   const [telegramForm, setTelegramForm] = useState({ botToken: "", chatId: "" });
@@ -54,8 +111,15 @@ export default function SettingsPage() {
   // Auto-trading status
   const [autoTradingInfo, setAutoTradingInfo] = useState(null);
 
+  async function refreshAutoTradingInfo() {
+    const payload = await fetchAutoTradingConfig();
+    setAutoTradingInfo(payload);
+    return payload;
+  }
+
   useEffect(() => {
     if (!runtimeSettings) return;
+    const autoConfig = runtimeSettings?.auto_trading || autoTradingInfo || {};
     setAlpacaForm({
       enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled),
       paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true),
@@ -65,14 +129,25 @@ export default function SettingsPage() {
       urlOverride: runtimeSettings?.broker?.alpaca?.url_override || "",
       autoTrading: Boolean(runtimeSettings?.broker?.auto_trading_enabled),
       orderSubmission: Boolean(runtimeSettings?.broker?.order_submission_enabled),
-      cycleMinutes: Number(runtimeSettings?.broker?.auto_trading_cycle_minutes ?? 30),
+      cycleMinutes: coerceNumber(autoConfig?.cycle_minutes ?? runtimeSettings?.broker?.auto_trading_cycle_minutes, 30),
+      strategyMode: autoConfig?.strategy_mode || "classic",
+      tradeDirection: autoConfig?.trade_direction || "both",
+      universePreset: autoConfig?.universe_preset || "FOCUSED_SAMPLE",
+      symbolLimit: coerceNumber(autoConfig?.symbol_limit, 10),
+      useFullPortfolio: Boolean(autoConfig?.use_full_portfolio),
+      analysisLookbackDays: coerceNumber(autoConfig?.analysis_lookback_days, 0),
+      notionalPerTrade: coerceNumber(autoConfig?.notional_per_trade, 0),
+      quantity: coerceNumber(autoConfig?.quantity, 1),
+      minSignalConfidence: coerceNumber(autoConfig?.min_signal_confidence, 59),
+      minEnsembleScore: coerceNumber(autoConfig?.min_ensemble_score, 0.18),
+      minAgreement: coerceNumber(autoConfig?.min_agreement, 0.25),
     });
-  }, [runtimeSettings]);
+  }, [runtimeSettings, autoTradingInfo]);
 
   useEffect(() => {
     fetchAiStatus().then(setLlmStatus).catch(() => {});
     fetchTelegramStatus().then(setTelegramStatus).catch(() => {});
-    fetchAutoTradingConfig().then(setAutoTradingInfo).catch(() => {});
+    refreshAutoTradingInfo().catch(() => {});
   }, []);
 
   async function handleTestLlm() {
@@ -98,10 +173,21 @@ export default function SettingsPage() {
         url_override: alpacaForm.urlOverride,
         auto_trading_enabled: alpacaForm.autoTrading,
         order_submission_enabled: alpacaForm.orderSubmission,
-        auto_trading_cycle_minutes: Number(alpacaForm.cycleMinutes || 30),
+        auto_trading_cycle_minutes: coerceNumber(alpacaForm.cycleMinutes, 30),
+        auto_trading_strategy_mode: alpacaForm.strategyMode,
+        auto_trading_trade_direction: alpacaForm.tradeDirection,
+        auto_trading_universe_preset: alpacaForm.universePreset,
+        auto_trading_symbol_limit: coerceNumber(alpacaForm.symbolLimit, 10),
+        auto_trading_use_full_portfolio: alpacaForm.useFullPortfolio,
+        auto_trading_analysis_lookback_days: coerceNumber(alpacaForm.analysisLookbackDays, 0),
+        auto_trading_notional_per_trade: coerceNumber(alpacaForm.notionalPerTrade, 0),
+        auto_trading_quantity: coerceNumber(alpacaForm.quantity, 1),
+        auto_trading_min_signal_confidence: coerceNumber(alpacaForm.minSignalConfidence, 59),
+        auto_trading_min_ensemble_score: coerceNumber(alpacaForm.minEnsembleScore, 0.18),
+        auto_trading_min_agreement: coerceNumber(alpacaForm.minAgreement, 0.25),
       });
       setAlpacaMsg(r.detail || "تم الحفظ بنجاح"); setAlpacaForm((p) => ({ ...p, apiKey: "", secretKey: "" })); await refreshData();
-      fetchAutoTradingConfig().then(setAutoTradingInfo).catch(() => {});
+      await refreshAutoTradingInfo();
     } catch (e) { setAlpacaMsg(e.message || "فشل الحفظ"); }
     finally { setSavingAlpaca(false); }
   }
@@ -140,6 +226,9 @@ export default function SettingsPage() {
   const processSummary = controlPlane?.process;
   const orchestrationSummary = controlPlane?.orchestration;
   const envBootstrap = controlPlane?.environment_bootstrap;
+  const selectedStrategyLabel = labelForOption(AUTO_TRADING_STRATEGY_OPTIONS, alpacaForm.strategyMode, "Classic Ranking");
+  const selectedDirectionLabel = labelForOption(AUTO_TRADING_DIRECTION_OPTIONS, alpacaForm.tradeDirection, "Long + Short");
+  const selectedUniverseLabel = labelForOption(AUTO_TRADING_UNIVERSE_OPTIONS, alpacaForm.universePreset, "Focused Sample");
   const jobCounts = useMemo(() => {
     const counts = { running: 0, pending: 0, completed: 0, failed: 0 };
     for (const j of recentJobs) { const k = String(j.status || "").toLowerCase(); if (counts[k] !== undefined) counts[k]++; }
@@ -161,7 +250,7 @@ export default function SettingsPage() {
       eyebrow="Platform"
       headerActions={
         <>
-          <button className="btn btn-secondary btn-sm" type="button" onClick={() => refreshData().catch(() => {})} disabled={settingsLoading}>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => Promise.all([refreshData(), refreshAutoTradingInfo()]).catch(() => {})} disabled={settingsLoading}>
             تحديث
           </button>
           <StatusBadge label={healthStatus.status || "checking"} tone={toneForState(healthStatus.status)} />
@@ -178,9 +267,9 @@ export default function SettingsPage() {
             { label: "الخلفية", value: healthStatus.status, tone: toneForState(healthStatus.status) },
             { label: "الجاهزية", value: readinessStatus.status, tone: toneForState(readinessStatus.status) },
             { label: "النماذج", value: runtimeStatus.model, tone: toneForState(runtimeStatus.model) },
-            { label: "الجدولة", value: runtimeStatus.scheduler, tone: toneForState(runtimeStatus.scheduler) },
-            { label: "الذكاء", value: runtimeStatus.ai, tone: toneForState(runtimeStatus.ai) },
-            { label: "الوسيط", value: runtimeStatus.broker, tone: toneForState(runtimeStatus.broker) },
+            { label: "الجدولة", value: runtimeStatus.scheduler, detail: runtimeStatus.schedulerDetail, tone: toneForState(runtimeStatus.scheduler) },
+            { label: "الذكاء", value: runtimeStatus.ai, detail: runtimeStatus.aiDetail, tone: toneForState(runtimeStatus.ai) },
+            { label: "الوسيط", value: runtimeStatus.broker, detail: runtimeStatus.brokerDetail, tone: toneForState(runtimeStatus.broker) },
           ]} />
         )}
       </SectionCard>
@@ -201,6 +290,9 @@ export default function SettingsPage() {
               <span>الوضع: {autoTradingInfo.alpaca_paper ? "ورقي" : "حقيقي"}</span>
               <span>النمط: {autoTradingInfo.trading_mode === "margin" ? "مارجن" : "كاش"}</span>
               <span>الدورة: {autoTradingInfo.cycle_minutes || 30} دقيقة</span>
+              <span>الاستراتيجية: {labelForOption(AUTO_TRADING_STRATEGY_OPTIONS, autoTradingInfo.strategy_mode, "Classic Ranking")}</span>
+              <span>الاتجاه: {labelForOption(AUTO_TRADING_DIRECTION_OPTIONS, autoTradingInfo.trade_direction, "Long + Short")}</span>
+              <span>الكون: {labelForOption(AUTO_TRADING_UNIVERSE_OPTIONS, autoTradingInfo.universe_preset, autoTradingInfo.universe_preset || "-")}</span>
             </div>
           </div>
         </div>
@@ -328,11 +420,151 @@ export default function SettingsPage() {
                 <span className="text-sm">دقيقة</span>
               </div>
             </div>
+            <div className="settings-row" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-3)", marginTop: "var(--space-2)" }}>
+              <span className="settings-row-label" style={{ fontWeight: 600 }}>طريقة القرار</span>
+              <select
+                className="form-input"
+                style={{ width: "220px" }}
+                value={alpacaForm.strategyMode}
+                onChange={(e) => setAlpacaForm((p) => ({ ...p, strategyMode: e.target.value }))}
+              >
+                {AUTO_TRADING_STRATEGY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">اتجاه التداول</span>
+              <select
+                className="form-input"
+                style={{ width: "220px" }}
+                value={alpacaForm.tradeDirection}
+                onChange={(e) => setAlpacaForm((p) => ({ ...p, tradeDirection: e.target.value }))}
+              >
+                {AUTO_TRADING_DIRECTION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">كون السوق</span>
+              <select
+                className="form-input"
+                style={{ width: "220px" }}
+                value={alpacaForm.universePreset}
+                onChange={(e) => setAlpacaForm((p) => ({ ...p, universePreset: e.target.value }))}
+              >
+                {AUTO_TRADING_UNIVERSE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">عدد الرموز في كل دورة</span>
+              <input
+                className="form-input"
+                style={{ width: "110px" }}
+                type="number"
+                min="1"
+                max="500"
+                step="1"
+                value={alpacaForm.symbolLimit}
+                onChange={(e) => setAlpacaForm((p) => ({ ...p, symbolLimit: e.target.value }))}
+              />
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">استخدم كامل المحفظة</span>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <input type="checkbox" checked={alpacaForm.useFullPortfolio} onChange={(e) => setAlpacaForm((p) => ({ ...p, useFullPortfolio: e.target.checked }))} />
+                <span className="text-sm">{alpacaForm.useFullPortfolio ? "نعم" : "لا"}</span>
+              </label>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">نافذة التحليل</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <input
+                  className="form-input"
+                  style={{ width: "110px" }}
+                  type="number"
+                  min="0"
+                  max="3650"
+                  step="1"
+                  value={alpacaForm.analysisLookbackDays}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, analysisLookbackDays: e.target.value }))}
+                />
+                <span className="text-sm">يوم (`0` = الافتراضي)</span>
+              </div>
+            </div>
+            <div className="settings-row" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-3)", marginTop: "var(--space-2)" }}>
+              <span className="settings-row-label" style={{ fontWeight: 600 }}>حجم الصفقة</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <span className="text-sm" style={{ color: "var(--tv-text-dim)" }}>Notional</span>
+                <input
+                  className="form-input"
+                  style={{ width: "120px" }}
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={alpacaForm.notionalPerTrade}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, notionalPerTrade: e.target.value }))}
+                />
+                <span className="text-sm" style={{ color: "var(--tv-text-dim)" }}>Fallback Qty</span>
+                <input
+                  className="form-input"
+                  style={{ width: "110px" }}
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={alpacaForm.quantity}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, quantity: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-row-label">فلتر الثقة</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <span className="text-sm" style={{ color: "var(--tv-text-dim)" }}>Min Conf</span>
+                <input
+                  className="form-input"
+                  style={{ width: "100px" }}
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={alpacaForm.minSignalConfidence}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, minSignalConfidence: e.target.value }))}
+                />
+                <span className="text-sm" style={{ color: "var(--tv-text-dim)" }}>Min Score</span>
+                <input
+                  className="form-input"
+                  style={{ width: "100px" }}
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={alpacaForm.minEnsembleScore}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, minEnsembleScore: e.target.value }))}
+                />
+                <span className="text-sm" style={{ color: "var(--tv-text-dim)" }}>Min Agree</span>
+                <input
+                  className="form-input"
+                  style={{ width: "100px" }}
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={alpacaForm.minAgreement}
+                  onChange={(e) => setAlpacaForm((p) => ({ ...p, minAgreement: e.target.value }))}
+                />
+              </div>
+            </div>
             {alpacaForm.autoTrading && (
               <div className="info-banner" style={{ background: "var(--surface-success, #e8f5e9)", borderRadius: 8, padding: "var(--space-2) var(--space-3)" }}>
-                التداول التلقائي مفعل — النظام سيفحص السوق كل {Number(alpacaForm.cycleMinutes || 30)} دقيقة
-                ويبدأ دورة التداول الورقي تلقائيًا على الفرص المكتشفة في البيئة التجريبية. نمط التنفيذ الحالي:{" "}
-                <strong>{alpacaForm.tradingMode === "margin" ? "مارجن / شورت مسموح" : "كاش فقط"}</strong>.
+                التداول التلقائي مفعل — النظام سيفحص السوق كل {coerceNumber(alpacaForm.cycleMinutes, 30)} دقيقة
+                على كون <strong>{selectedUniverseLabel}</strong> باستخدام <strong>{selectedStrategyLabel}</strong> وباتجاه <strong>{selectedDirectionLabel}</strong>.
+                سيتم فحص حتى <strong>{coerceNumber(alpacaForm.symbolLimit, 10)}</strong> رمز في كل دورة.
+                {alpacaForm.useFullPortfolio ? " سيتم توزيع رأس المال المتاح على الفرص المختارة تلقائيًا." : " سيتم استخدام قيمة الـ Notional أو الكمية الاحتياطية التي حددتها."}
+                {" "}نمط التنفيذ الحالي: <strong>{alpacaForm.tradingMode === "margin" ? "مارجن / شورت مسموح" : "كاش فقط"}</strong>.
               </div>
             )}
             {alpacaMsg && <div className="info-banner">{alpacaMsg}</div>}

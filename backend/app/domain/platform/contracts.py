@@ -255,7 +255,7 @@ class DecisionPackage(BaseModel):
 class ExecutionIntentContract(BaseModel):
     """Structured execution intent — before confirmation step."""
 
-    intent: Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", "NONE"]
+    intent: Literal["OPEN_LONG", "ADD_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", "NONE"]
     symbol: str
     strategy_mode: str
     side: str | None = None

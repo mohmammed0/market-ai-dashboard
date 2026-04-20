@@ -26,6 +26,7 @@ from backend.app.services.ml_lab import list_model_runs
 from backend.app.services.signal_runtime import build_smart_analysis
 from backend.app.services.storage import dumps_json, loads_json, session_scope
 from core.backtest_service import backtest_symbol_enhanced, run_vectorbt_backtest
+from core.source_data import load_symbol_source_data
 
 
 def _safe_float(value, default=0.0):
@@ -169,6 +170,118 @@ def compute_overfitting_metrics(
     }
 
 
+def compute_lookahead_audit_metrics(
+    *,
+    instrument: str,
+    start_date: str,
+    end_date: str,
+    hold_days: int,
+    events: list[dict] | None,
+) -> dict:
+    """Stress test timing sensitivity by delaying entry to the next bar open.
+
+    This is not a formal proof of lookahead bias. It is a practical audit that
+    flags strategy outputs whose edge collapses when the entry is delayed by one
+    bar, which is often a symptom of fragile timing or subtle leakage.
+    """
+    trade_events = list(events or [])
+    if not trade_events:
+        return {
+            "mode": "next_bar_open_delay",
+            "audited_trades": 0,
+            "possible_leakage_flag": False,
+            "note": "No enhanced trade events were available for a lookahead audit.",
+        }
+
+    source = load_symbol_source_data(
+        instrument,
+        start_date=start_date,
+        end_date=end_date,
+        persist_on_fetch=True,
+    )
+    if source.error or source.frame is None or source.frame.empty:
+        return {
+            "mode": "next_bar_open_delay",
+            "audited_trades": 0,
+            "possible_leakage_flag": False,
+            "note": f"Could not load source data for audit: {source.error or 'empty frame'}",
+        }
+
+    raw_df = source.frame.rename(columns={"date": "datetime"}).copy()
+    raw_df["datetime"] = pd.to_datetime(raw_df["datetime"], errors="coerce")
+    raw_df = raw_df.dropna(subset=["datetime", "open", "close"]).sort_values("datetime").reset_index(drop=True)
+    if raw_df.empty:
+        return {
+            "mode": "next_bar_open_delay",
+            "audited_trades": 0,
+            "possible_leakage_flag": False,
+            "note": "Audit source frame is empty after normalization.",
+        }
+
+    index_by_day = {row["datetime"].date().isoformat(): idx for idx, row in raw_df.iterrows()}
+    delayed_returns: list[float] = []
+    current_returns: list[float] = []
+    skipped = 0
+
+    for event in trade_events:
+        day_key = str(event.get("datetime") or "")[:10]
+        idx = index_by_day.get(day_key)
+        direction = 1 if str(event.get("enhanced_signal") or "").upper() == "BUY" else -1
+        if idx is None or direction == 0:
+            skipped += 1
+            continue
+        entry_idx = idx + 1
+        exit_idx = entry_idx + max(int(hold_days), 1)
+        if entry_idx >= len(raw_df) or exit_idx >= len(raw_df):
+            skipped += 1
+            continue
+        entry_open = _safe_float(raw_df.iloc[entry_idx]["open"])
+        exit_close = _safe_float(raw_df.iloc[exit_idx]["close"])
+        if entry_open <= 0 or exit_close <= 0:
+            skipped += 1
+            continue
+        delayed_return = direction * (((exit_close / entry_open) - 1.0) * 100.0)
+        delayed_returns.append(delayed_return)
+        current_returns.append(_safe_float(event.get("trade_return_pct")))
+
+    if not delayed_returns:
+        return {
+            "mode": "next_bar_open_delay",
+            "audited_trades": 0,
+            "skipped_trades": skipped,
+            "possible_leakage_flag": False,
+            "note": "Audit could not compute delayed-entry trades from available data.",
+        }
+
+    current_avg = sum(current_returns) / len(current_returns)
+    delayed_avg = sum(delayed_returns) / len(delayed_returns)
+    current_win_rate = (sum(1 for value in current_returns if value > 0) / len(current_returns)) * 100.0
+    delayed_win_rate = (sum(1 for value in delayed_returns if value > 0) / len(delayed_returns)) * 100.0
+    denominator = max(abs(current_avg), 1.0)
+    decay_pct = ((current_avg - delayed_avg) / denominator) * 100.0
+    win_rate_drop_pct = current_win_rate - delayed_win_rate
+    leakage_flag = decay_pct > 35.0 or win_rate_drop_pct > 20.0
+
+    note = (
+        "Delayed-entry performance degraded sharply; review signal timing for leakage or unrealistic same-bar fills."
+        if leakage_flag
+        else "Delayed-entry audit is within a reasonable range."
+    )
+    return {
+        "mode": "next_bar_open_delay",
+        "audited_trades": len(delayed_returns),
+        "skipped_trades": skipped,
+        "current_avg_trade_return_pct": round(current_avg, 4),
+        "delayed_avg_trade_return_pct": round(delayed_avg, 4),
+        "performance_decay_pct": round(decay_pct, 2),
+        "current_win_rate_pct": round(current_win_rate, 2),
+        "delayed_win_rate_pct": round(delayed_win_rate, 2),
+        "win_rate_drop_pct": round(win_rate_drop_pct, 2),
+        "possible_leakage_flag": leakage_flag,
+        "note": note,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main evaluation
 # ---------------------------------------------------------------------------
@@ -275,6 +388,13 @@ def run_strategy_evaluation(
     # ------------------------------------------------------------------
     full_return_pct = _safe_float(classic.get("total_return_pct"))
     overfitting = compute_overfitting_metrics(walk_forward, full_return_pct)
+    lookahead_audit = compute_lookahead_audit_metrics(
+        instrument=instrument,
+        start_date=start_date,
+        end_date=end_date,
+        hold_days=hold_days,
+        events=classic.get("events") or [],
+    )
 
     # ------------------------------------------------------------------
     # Experiment tracking (NEW)
@@ -316,6 +436,7 @@ def run_strategy_evaluation(
         "strategies": summaries,
         "walk_forward": walk_forward,
         "overfitting": overfitting,
+        "lookahead_audit": lookahead_audit,
         "config_hash": cfg_hash,
         "model_runs": {
             "ml": list_model_runs("ml")[:3],
@@ -348,6 +469,7 @@ def run_strategy_evaluation(
         "model_runs": metrics["model_runs"],
         # Rigor additions
         "overfitting": overfitting,
+        "lookahead_audit": lookahead_audit,
         "config_hash": cfg_hash,
         "experiment_tracked": experiment_result.get("backend") not in {None, "failed"},
         "experiment_backend": experiment_result.get("backend"),

@@ -357,6 +357,27 @@ export default function StrategyLabPage() {
                     />
                   </div>
                 ) : null}
+                {evaluation.lookahead_audit ? (
+                  <div className="strategy-overfit-strip">
+                    <div className="strategy-overfit-header">
+                      <span className="strategy-overfit-title">تدقيق الـ Lookahead</span>
+                      <StatusBadge
+                        label={evaluation.lookahead_audit.possible_leakage_flag ? "احتمال تسرب" : "مستقر"}
+                        tone={evaluation.lookahead_audit.possible_leakage_flag ? "warning" : "positive"}
+                      />
+                    </div>
+                    <SummaryStrip
+                      compact
+                      items={[
+                        { label: "الصفقات المدققة", value: evaluation.lookahead_audit.audited_trades ?? 0 },
+                        { label: "العائد الحالي", value: evaluation.lookahead_audit.current_avg_trade_return_pct != null ? `${evaluation.lookahead_audit.current_avg_trade_return_pct}%` : "-" },
+                        { label: "العائد المؤخر", value: evaluation.lookahead_audit.delayed_avg_trade_return_pct != null ? `${evaluation.lookahead_audit.delayed_avg_trade_return_pct}%` : "-" },
+                        { label: "تآكل الأداء", value: evaluation.lookahead_audit.performance_decay_pct != null ? `${evaluation.lookahead_audit.performance_decay_pct}%` : "-", tone: Number(evaluation.lookahead_audit.performance_decay_pct) > 35 ? "negative" : "positive" },
+                        { label: "هبوط Win Rate", value: evaluation.lookahead_audit.win_rate_drop_pct != null ? `${evaluation.lookahead_audit.win_rate_drop_pct}%` : "-", tone: Number(evaluation.lookahead_audit.win_rate_drop_pct) > 20 ? "negative" : "positive" },
+                      ]}
+                    />
+                  </div>
+                ) : null}
                 <DataTable
                   columns={leaderboardColumns}
                   data={evaluation.leaderboard || []}

@@ -293,7 +293,7 @@ export default function TradingChart({
   description = "الرسم البياني والمناطق والمستويات.",
   height = 420,
   showVolume: showVolumeOverride,
-  emptyTitle = "لا توجد بيانات رسم بيا��ي",
+  emptyTitle = "لا توجد بيانات رسم بياني",
   emptyDescription = "أجرِ التحليل لعرض مساحة العمل.",
 }) {
   const containerRef = useRef(null);

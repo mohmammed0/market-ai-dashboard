@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import PageFrame from "../components/ui/PageFrame";
 import DataTable from "../components/ui/DataTable";
+import EmptyState from "../components/ui/EmptyState";
 import ErrorBanner from "../components/ui/ErrorBanner";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import ResultCard from "../components/ui/ResultCard";
@@ -9,6 +10,7 @@ import SectionHeader from "../components/ui/SectionHeader";
 import StatusBadge from "../components/ui/StatusBadge";
 import SummaryStrip from "../components/ui/SummaryStrip";
 import { fetchBrokerSummary, liquidateBrokerPortfolio } from "../api/broker";
+import { fetchExecutionReconcile, runExecutionReconcile } from "../api/execution";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { t } from "../lib/i18n";
 
@@ -16,7 +18,9 @@ import { t } from "../lib/i18n";
 export default function BrokerPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [liquidating, setLiquidating] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
+  const [reconcilePayload, setReconcilePayload] = useState(null);
   const {
     data: summary,
     loading,
@@ -52,6 +56,19 @@ export default function BrokerPage() {
     []
   );
 
+  const reconcileColumns = useMemo(
+    () => [
+      { accessorKey: "symbol", header: "Symbol" },
+      { accessorKey: "status", header: "Status" },
+      { accessorKey: "broker_side", header: "Broker Side" },
+      { accessorKey: "internal_side", header: "Internal Side" },
+      { accessorKey: "broker_quantity", header: "Broker Qty" },
+      { accessorKey: "internal_quantity", header: "Internal Qty" },
+      { accessorKey: "quantity_delta", header: "Delta" },
+    ],
+    []
+  );
+
   const brokerTone = summary?.connected ? "accent" : summary?.enabled ? "warning" : "subtle";
   const brokerLabel = summary?.connected
     ? `${summary.provider?.toUpperCase?.() || "Broker"} · ${summary.mode || "paper"}`
@@ -60,10 +77,31 @@ export default function BrokerPage() {
       : "Broker Disabled";
   const liquidationDisabled = !summary?.connected || !summary?.order_submission_enabled || (summary?.positions?.length ?? 0) === 0 || liquidating;
 
+  async function handleReconcile(applySync = false) {
+    setReconciling(true);
+    try {
+      const response = applySync
+        ? await runExecutionReconcile({ broker: "alpaca", strategy_mode: "classic", apply_sync: true })
+        : await fetchExecutionReconcile({ broker: "alpaca", strategy_mode: "classic" });
+      setReconcilePayload(response);
+      if (applySync) {
+        setActionMessage(`تمت مزامنة ${response?.sync_result?.positions ?? 0} مركز داخلي مع الوسيط.`);
+        await reload(true);
+      }
+    } catch (actionError) {
+      setActionMessage(actionError.message || "فشل فحص المطابقة بين الوسيط والمحفظة الداخلية.");
+    } finally {
+      setReconciling(false);
+    }
+  }
+
   async function handleRefresh() {
     setRefreshing(true);
     try {
       await reload(true);
+      if (summary?.connected) {
+        await handleReconcile(false);
+      }
     } catch (error) {
       // Error state is handled by the shared resource hook.
     } finally {
@@ -87,6 +125,13 @@ export default function BrokerPage() {
       setLiquidating(false);
     }
   }
+
+  useEffect(() => {
+    if (!summary?.connected || loading || reconcilePayload || reconciling) {
+      return;
+    }
+    handleReconcile(false).catch(() => {});
+  }, [summary?.connected, loading]);
 
   return (
     <PageFrame
@@ -135,6 +180,12 @@ export default function BrokerPage() {
               <button className="primary-button" type="button" onClick={handleRefresh} disabled={refreshing}>
                 {refreshing ? "جارٍ التحديث..." : "تحديث لقطة الوسيط"}
               </button>
+              <button className="secondary-button" type="button" onClick={() => handleReconcile(false)} disabled={!summary?.connected || reconciling}>
+                {reconciling ? "جارٍ الفحص..." : "فحص المطابقة"}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => handleReconcile(true)} disabled={!summary?.connected || reconciling}>
+                {reconciling ? "جارٍ المزامنة..." : "مزامنة الداخلي"}
+              </button>
               <button className="btn btn-danger btn-sm" type="button" onClick={handleLiquidate} disabled={liquidationDisabled}>
                 {liquidating ? "جارٍ التسييل..." : "تسييل المحفظة"}
               </button>
@@ -166,6 +217,40 @@ export default function BrokerPage() {
             <strong>{t("No broker account connected")}</strong>
             <p>احفظ بيانات Alpaca من صفحة الإعدادات ثم اختبر الاتصال هناك. يبقى التداول التجريبي الداخلي متاحاً حتى لو كان اتصال الوسيط غير مهيأ.</p>
           </div>
+        )}
+      </div>
+
+      <div className="panel result-panel">
+        <SectionHeader
+          title="Execution Reconciliation"
+          description="مقارنة مباشرة بين مراكز الوسيط والمراكز الداخلية مع خيار مزامنة داخلي محافظ."
+        />
+        {reconciling && !reconcilePayload ? (
+          <LoadingSkeleton lines={5} />
+        ) : reconcilePayload ? (
+          <>
+            <SummaryStrip
+              items={[
+                { label: "Broker", value: reconcilePayload.summary?.broker_positions ?? 0 },
+                { label: "Internal", value: reconcilePayload.summary?.internal_positions ?? 0 },
+                { label: "Matched", value: reconcilePayload.summary?.matched ?? 0, tone: "positive" },
+                { label: "Mismatched", value: reconcilePayload.summary?.mismatched ?? 0, tone: (reconcilePayload.summary?.mismatched ?? 0) > 0 ? "warning" : "positive" },
+                { label: "Broker Only", value: reconcilePayload.summary?.broker_only ?? 0, tone: (reconcilePayload.summary?.broker_only ?? 0) > 0 ? "warning" : "neutral" },
+                { label: "Internal Only", value: reconcilePayload.summary?.internal_only ?? 0, tone: (reconcilePayload.summary?.internal_only ?? 0) > 0 ? "warning" : "neutral" },
+              ]}
+            />
+            <DataTable
+              columns={reconcileColumns}
+              data={reconcilePayload.positions || []}
+              emptyTitle="No reconciliation rows"
+              emptyDescription="No broker/internal positions were available for comparison."
+            />
+          </>
+        ) : (
+          <EmptyState
+            title="لم يتم تشغيل المطابقة بعد"
+            description="شغّل فحص المطابقة لإظهار الفروق بين حالة الوسيط والحالة الداخلية."
+          />
         )}
       </div>
 

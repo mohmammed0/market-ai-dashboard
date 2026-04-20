@@ -16,6 +16,7 @@ from backend.app.config import (
 )
 from backend.app.services.cache import get_cache_status
 from backend.app.services.continuous_learning import get_continuous_learning_runtime_snapshot
+from backend.app.services.open_telemetry import get_open_telemetry_status
 from backend.app.services.runtime_settings import get_runtime_settings_overview
 from backend.app.services.scheduler_runtime import get_scheduler_status
 from core.runtime_env import ENV_BOOTSTRAP_INFO
@@ -147,6 +148,17 @@ def get_runtime_control_plane() -> dict[str, Any]:
             "paths": get_runtime_paths(),
         },
         "cache": get_cache_status(),
+        "observability": {
+            "otel": _safe(
+                get_open_telemetry_status,
+                {
+                    "enabled": False,
+                    "active": False,
+                    "runtime": "unavailable",
+                    "detail": "OpenTelemetry status is unavailable.",
+                },
+            ),
+        },
         "orchestration_topology": _safe(
             lambda: __import__(
                 "backend.app.services.orchestration_gateway",

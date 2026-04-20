@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
 from backend.app.services.observability import get_metrics_summary, prometheus_text_export
+from backend.app.services.open_telemetry import get_open_telemetry_status
 from backend.app.services.tool_gateway import get_tool_gateway
 
 router = APIRouter(prefix="/metrics", tags=["observability"])
@@ -42,4 +43,12 @@ def tool_gateway_status():
         "registered_tools": gw.list_tools(),
         "call_counters": gw.get_counters(),
         "recent_calls": gw.get_audit_log(limit=20),
+    }
+
+
+@router.get("/otel")
+def otel_status():
+    """OpenTelemetry runtime status and exporter wiring."""
+    return {
+        "otel": get_open_telemetry_status(),
     }

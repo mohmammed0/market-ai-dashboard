@@ -39,7 +39,7 @@ export default function PaperTradingPage() {
   const { data: dashboardLite } = useAppData("dashboardLite");
   const { fetchSection } = useAppStore() || {};
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
-  const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
+  const sourceLabel = portfolioSnapshot?.source_label || "Broker Paper";
   const brokerStatus = portfolioSnapshot?.broker_status || {};
   const positionsSectionLoading = portfolioSnapshotLoading;
   const ordersSectionLoading = portfolioSnapshotLoading;
@@ -195,13 +195,17 @@ export default function PaperTradingPage() {
     { accessorKey: "side", header: "الجانب" },
     { accessorKey: "order_type", header: "النوع" },
     { accessorKey: "quantity", header: "الكمية" },
-    { accessorKey: "status", header: "الحالة", cell: ({ row }) => <StatusBadge label={row.original.status} tone={row.original.status === "OPEN" ? "info" : "neutral"} dot={false} /> },
+    { accessorKey: "status", header: "الحالة", cell: ({ row }) => {
+      const status = String(row.original.status || "").toUpperCase();
+      const isOpenLike = !["FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "REPLACED", "SUSPENDED"].includes(status);
+      return <StatusBadge label={row.original.status} tone={isOpenLike ? "info" : "neutral"} dot={false} />;
+    }},
     { accessorKey: "id", header: "إجراء", cell: ({ row }) => (
-      !usingBrokerData && row.original.status === "OPEN"
+      !["FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "REPLACED", "SUSPENDED"].includes(String(row.original.status || "").toUpperCase())
         ? <button className="btn btn-danger btn-xs" type="button" onClick={() => handleCancel(row.original.id)}>إلغاء</button>
         : null
     )},
-  ], [usingBrokerData]);
+  ], []);
 
   const signalColumns = useMemo(() => [
     { accessorKey: "symbol", header: "الرمز", cell: ({ row }) => <span className="cell-primary">{row.original.symbol}</span> },
@@ -233,8 +237,8 @@ export default function PaperTradingPage() {
 
   return (
     <PageFrame
-      title="التداول الورقي"
-      description="محفظة تداول ورقي مباشرة، إشارات ذكية، وأوامر مفتوحة."
+      title="حساب الوسيط الورقي"
+      description="المراكز والأوامر والعمليات من حساب الوسيط الورقي الخارجي، بدون محاكاة تنفيذ داخلية."
       eyebrow="التداول"
       headerActions={
         <button
@@ -250,7 +254,7 @@ export default function PaperTradingPage() {
       <ErrorBanner message={pageError} />
       {usingBrokerData && (
         <div className="info-banner">
-          المصدر الحالي: {sourceLabel}. يتم عرض الرصيد والمراكز والأوامر والصفقات من حساب Alpaca المتصل، بينما تبويب الإشارات ما زال يعتمد على محرك التحليل الداخلي.
+          المصدر الحالي: {sourceLabel}. لا يوجد محرك تداول ورقي داخلي نشط. الرصيد والمراكز والأوامر والصفقات تأتي من حساب Alpaca الورقي المتصل، بينما تبويب الإشارات يعرض قرارات التحليل فقط.
         </div>
       )}
 

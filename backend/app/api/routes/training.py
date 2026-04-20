@@ -2,7 +2,10 @@ from fastapi import APIRouter, Query
 
 from backend.app.api.error_handling import to_http_exception
 from backend.app.api.job_submission import start_training_job_or_raise
-from backend.app.application.model_lifecycle.training_payloads import build_training_job_payload
+from backend.app.application.model_lifecycle.training_payloads import (
+    list_training_workflow_templates,
+    resolve_training_job_config,
+)
 from backend.app.application.model_lifecycle.training_jobs import get_training_dashboard, get_training_job, list_training_jobs
 from backend.app.schemas.requests import TrainingJobStartRequest
 
@@ -20,6 +23,11 @@ def training_dashboard(limit: int = Query(default=25, ge=5, le=100)):
     return get_training_dashboard(limit=limit)
 
 
+@router.get("/workflow-templates")
+def training_workflow_templates(model_type: str | None = Query(default=None)):
+    return list_training_workflow_templates(model_type=model_type)
+
+
 @router.get("/jobs/{job_id}")
 def training_job(job_id: str):
     try:
@@ -30,8 +38,11 @@ def training_job(job_id: str):
 
 @router.post("/jobs/start")
 def training_job_start(payload: TrainingJobStartRequest):
-    return start_training_job_or_raise(
-        model_type=payload.model_type,
-        payload=build_training_job_payload(payload.model_type, payload),
+    resolved = resolve_training_job_config(payload.model_type, payload)
+    response = start_training_job_or_raise(
+        model_type=resolved["model_type"],
+        payload=resolved["payload"],
         requested_by="anonymous",
     )
+    response["workflow_template"] = resolved["template"]
+    return response

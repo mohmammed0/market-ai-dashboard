@@ -74,6 +74,17 @@ export async function fetchExecutionAudit(params = {}) {
   return getJson(`/api/execution/audit${query.size ? `?${query.toString()}` : ""}`);
 }
 
+export async function fetchExecutionReconcile(params = {}) {
+  const query = new URLSearchParams();
+  if (params.broker) query.set("broker", params.broker);
+  if (params.strategy_mode) query.set("strategy_mode", params.strategy_mode);
+  return getJson(`/api/execution/reconcile${query.size ? `?${query.toString()}` : ""}`);
+}
+
+export async function runExecutionReconcile(payload = {}) {
+  return postJson("/api/execution/reconcile", payload);
+}
+
 export async function fetchPaperOrders(status = "OPEN") {
   const query = new URLSearchParams();
   if (status) query.set("status", status);

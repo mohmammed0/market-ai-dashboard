@@ -1,5 +1,6 @@
 from .ai import router as ai_router
 from .ai_research import router as ai_research_router
+from .analysis_engines import router as analysis_engines_router
 from .metrics import router as metrics_router
 from .analyze import router as analyze_router
 from .alerts_center import router as alerts_router
@@ -9,6 +10,9 @@ from .broker import router as broker_router
 from .breadth import router as breadth_router
 from .continuous_learning import router as continuous_learning_router
 from .dashboard import router as dashboard_router
+from .diagnostics import router as diagnostics_router
+from .portfolio_brain import router as portfolio_brain_router
+from .kronos import router as kronos_router
 from .execution import router as execution_router
 from .events import router as events_router
 from .fundamentals import router as fundamentals_router
@@ -23,6 +27,8 @@ from .position_sizing import router as position_sizing_router
 from .portfolio_risk import router as portfolio_risk_router
 from .market import router as market_router
 from .market_data import router as market_data_router
+from .market_readiness import router as market_readiness_router
+from .market_session import router as market_session_router
 from .market_terminal import router as market_terminal_router
 from .model_lifecycle import router as model_lifecycle_router
 from .models_promotion import router as models_promotion_router
@@ -49,6 +55,7 @@ from .notifications import router as notifications_router
 from .ai_chat import router as ai_chat_router
 
 __all__ = [
+    "analysis_engines_router",
     "analyze_router",
     "ai_router",
     "ai_research_router",
@@ -59,6 +66,9 @@ __all__ = [
     "breadth_router",
     "continuous_learning_router",
     "dashboard_router",
+    "diagnostics_router",
+    "portfolio_brain_router",
+    "kronos_router",
     "execution_router",
     "events_router",
     "fundamentals_router",
@@ -70,6 +80,8 @@ __all__ = [
     "live_router",
     "market_router",
     "market_data_router",
+    "market_readiness_router",
+    "market_session_router",
     "market_terminal_router",
     "model_lifecycle_router",
     "models_promotion_router",

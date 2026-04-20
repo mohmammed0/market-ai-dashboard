@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -46,6 +48,10 @@ class VectorSearchProvider(Protocol):
         *,
         query_text: str,
         symbol: str | None,
+        source_type: str | None,
+        tags: list[str] | None,
+        date_from: str | None,
+        date_to: str | None,
         limit: int,
         min_score: float,
     ) -> list[dict[str, Any]]: ...
@@ -61,21 +67,123 @@ class NullVectorSearchProvider:
         *,
         query_text: str,
         symbol: str | None,
+        source_type: str | None,
+        tags: list[str] | None,
+        date_from: str | None,
+        date_to: str | None,
         limit: int,
         min_score: float,
     ) -> list[dict[str, Any]]:
         return []
 
 
+def _semantic_tokens(value: str) -> list[str]:
+    return [token for token in re.split(r"[^a-z0-9_]+", str(value or "").lower()) if len(token) >= 2][:256]
+
+
+def _char_ngrams(value: str, n: int = 3) -> set[str]:
+    text = re.sub(r"\s+", " ", str(value or "").lower()).strip()
+    if len(text) < n:
+        return {text} if text else set()
+    return {text[index:index + n] for index in range(len(text) - n + 1)}
+
+
+def _semantic_text(row: dict[str, Any]) -> str:
+    tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+    return " ".join(
+        part
+        for part in [
+            str(row.get("title") or "").strip(),
+            str(row.get("summary") or "").strip(),
+            str(row.get("content") or "").strip(),
+            str(row.get("symbol") or "").strip(),
+            str(row.get("source_type") or "").strip(),
+            " ".join(str(tag).strip().lower() for tag in tags if str(tag).strip()),
+        ]
+        if part
+    ).strip()
+
+
+def _overlap_ratio(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(math.sqrt(len(left) * len(right)), 1.0)
+
+
+@dataclass(slots=True)
+class LocalSemanticSearchProvider:
+    provider_name: str = "local_semantic"
+    ready: bool = True
+
+    def search(
+        self,
+        *,
+        query_text: str,
+        symbol: str | None,
+        source_type: str | None,
+        tags: list[str] | None,
+        date_from: str | None,
+        date_to: str | None,
+        limit: int,
+        min_score: float,
+    ) -> list[dict[str, Any]]:
+        normalized_query = str(query_text or "").strip()
+        if not normalized_query:
+            return []
+
+        candidate_limit = max(120, min(int(limit or 8) * 20, 400))
+        with session_scope() as session:
+            repo = KnowledgeDocumentRepository(session)
+            candidates = repo.search_documents(
+                query_text=None,
+                symbol=symbol,
+                source_type=source_type,
+                tags=tags,
+                date_from=_parse_iso_datetime(date_from),
+                date_to=_parse_iso_datetime(date_to),
+                limit=candidate_limit,
+                offset=0,
+            )
+
+        query_tokens = set(_semantic_tokens(normalized_query))
+        query_ngrams = _char_ngrams(normalized_query)
+        ranked: list[dict[str, Any]] = []
+        for item in candidates:
+            semantic_text = _semantic_text(item)
+            text_lower = semantic_text.lower()
+            doc_tokens = set(_semantic_tokens(semantic_text))
+            doc_ngrams = _char_ngrams(semantic_text)
+            token_score = _overlap_ratio(query_tokens, doc_tokens)
+            ngram_score = _overlap_ratio(query_ngrams, doc_ngrams)
+            phrase_bonus = 0.2 if normalized_query.lower() in text_lower else 0.0
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            importance_boost = max(0.0, min(float(metadata.get("importance_boost") or 0.0), 1.0))
+            score = min(1.0, round((token_score * 0.55) + (ngram_score * 0.25) + phrase_bonus + (importance_boost * 0.15), 4))
+            if score < float(min_score or 0.0):
+                continue
+            ranked.append({**item, "vector_score": score, "score": score})
+
+        ranked.sort(
+            key=lambda row: (
+                float(row.get("vector_score") or row.get("score") or 0.0),
+                str(row.get("created_at") or ""),
+            ),
+            reverse=True,
+        )
+        return ranked[: max(1, int(limit or 8))]
+
+
 _vector_provider: VectorSearchProvider = NullVectorSearchProvider()
 
 
 def get_vector_provider() -> VectorSearchProvider:
+    global _vector_provider
     if not KNOWLEDGE_VECTOR_ENABLED:
+        if not isinstance(_vector_provider, NullVectorSearchProvider):
+            _vector_provider = NullVectorSearchProvider()
         return _vector_provider
-    # Embedding search is intentionally optional for this deployment profile.
-    # We keep the interface live and return lexical-only results until an
-    # external embedding backend is explicitly wired.
+    if isinstance(_vector_provider, NullVectorSearchProvider):
+        _vector_provider = LocalSemanticSearchProvider()
     return _vector_provider
 
 
@@ -213,6 +321,10 @@ def search_knowledge_documents(
         vector_items = provider.search(
             query_text=normalized_query,
             symbol=symbol,
+            source_type=source_type,
+            tags=tags,
+            date_from=date_from,
+            date_to=date_to,
             limit=resolved_limit,
             min_score=KNOWLEDGE_VECTOR_MIN_SCORE,
         )

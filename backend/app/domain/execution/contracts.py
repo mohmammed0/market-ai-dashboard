@@ -26,13 +26,14 @@ class ExecutionCommand(BaseModel):
 
 
 class TradeIntent(BaseModel):
-    intent: Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", "NONE"]
+    intent: Literal["OPEN_LONG", "ADD_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", "NONE"]
     symbol: str
     strategy_mode: str
     side: Literal["LONG", "SHORT"] | None = None
     quantity: float = Field(default=0.0, ge=0.0)
     execution_price: float = Field(default=0.0, ge=0.0)
     reason: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PositionState(BaseModel):

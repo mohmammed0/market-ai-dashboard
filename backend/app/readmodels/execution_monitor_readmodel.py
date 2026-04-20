@@ -13,6 +13,12 @@ from backend.app.services.execution_halt import get_halt_status
 
 def build_execution_monitor_readmodel(*, limit: int = 100) -> dict:
     return {
+        "broker_managed_only": True,
+        "internal_paper_enabled": False,
+        "account_source": "broker",
+        "position_source": "broker",
+        "order_source": "broker",
+        "execution_source": "broker",
         "portfolio": get_internal_portfolio(limit=max(limit, 500)),
         "open_orders": list_paper_orders(limit=limit, status="OPEN"),
         "orders": list_paper_orders(limit=limit, status=None),
@@ -25,4 +31,3 @@ def build_execution_monitor_readmodel(*, limit: int = 100) -> dict:
 
 
 __all__ = ["build_execution_monitor_readmodel"]
-

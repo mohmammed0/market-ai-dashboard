@@ -1,7 +1,31 @@
-from live_market_engine import LiveMarketEngine
+from __future__ import annotations
+
+
+class DisabledLiveEngine:
+    provider_mode = "unavailable"
+
+    def __init__(self, reason: str | None = None):
+        self.reason = str(reason or "Live engine dependencies are unavailable.")
+        self.symbols: list[str] = []
+        self.poll_interval = 3
+        self.api_key = ""
+        self.api_secret = ""
+
+    def start(self):
+        return None
+
+    def stop(self):
+        return None
+
+    def get_event(self, timeout=0.0):
+        return None
 
 
 def create_live_engine():
+    try:
+        from live_market_engine import LiveMarketEngine  # noqa: PLC0415
+    except Exception as exc:
+        return DisabledLiveEngine(reason=str(exc))
     return LiveMarketEngine()
 
 

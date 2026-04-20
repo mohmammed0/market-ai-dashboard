@@ -795,36 +795,62 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
   border: 1px solid transparent;
 }
 
 .status-badge--positive {
-  background: var(--tv-positive-soft);
+  background: rgba(8, 153, 129, 0.14);
   color: var(--tv-positive);
-  border-color: rgba(8, 153, 129, 0.2);
+  border-color: rgba(8, 153, 129, 0.32);
 }
 
 .status-badge--negative {
-  background: var(--tv-negative-soft);
+  background: rgba(242, 54, 69, 0.14);
   color: var(--tv-negative);
-  border-color: rgba(242, 54, 69, 0.2);
+  border-color: rgba(242, 54, 69, 0.32);
 }
 
 .status-badge--warning {
-  background: var(--tv-warning-soft);
+  background: rgba(245, 158, 11, 0.14);
   color: var(--tv-warning);
-  border-color: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+.status-badge--info {
+  background: rgba(41, 98, 255, 0.14);
+  color: var(--tv-accent);
+  border-color: rgba(41, 98, 255, 0.32);
 }
 
 .status-badge--neutral {
-  background: rgba(149, 152, 161, 0.12);
+  background: rgba(149, 152, 161, 0.14);
   color: var(--tv-text-muted);
-  border-color: rgba(149, 152, 161, 0.2);
+  border-color: rgba(149, 152, 161, 0.3);
+}
+
+.status-badge--sm {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 9px;
+  gap: 5px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
 }
 
 /* ─── DataTable ─── */
@@ -1050,17 +1076,49 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .signal-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
 }
 
-.signal-badge--buy { background: var(--tv-positive-soft); color: var(--tv-positive); }
-.signal-badge--sell { background: var(--tv-negative-soft); color: var(--tv-negative); }
-.signal-badge--hold, .signal-badge--neutral { background: rgba(149, 152, 161, 0.12); color: var(--tv-text-muted); }
+.signal-badge--buy {
+  background: rgba(8, 153, 129, 0.16);
+  border-color: rgba(8, 153, 129, 0.34);
+  color: var(--tv-positive);
+}
+
+.signal-badge--sell {
+  background: rgba(242, 54, 69, 0.16);
+  border-color: rgba(242, 54, 69, 0.34);
+  color: var(--tv-negative);
+}
+
+.signal-badge--hold {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.34);
+  color: var(--tv-warning);
+}
+
+.signal-badge--neutral {
+  background: rgba(149, 152, 161, 0.14);
+  border-color: rgba(149, 152, 161, 0.3);
+  color: var(--tv-text-muted);
+}
+
+.signal-badge--sm {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 9px;
+}
 
 /* ─── Loading skeleton ─── */
 .loading-skeleton { display: flex; flex-direction: column; gap: 8px; }
@@ -1387,17 +1445,25 @@ label { color: var(--tv-text-muted); font-size: 12px; font-weight: 600; }
   flex-shrink: 0;
 }
 
-/* ─── chip ─── */
+/* ─── metric chip ─── */
+.metric-chip,
 .chip {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
-  background: var(--tv-accent-soft);
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  background: rgba(41, 98, 255, 0.14);
   color: var(--tv-accent);
-  border-radius: var(--radius-sm);
+  border: 1px solid rgba(41, 98, 255, 0.3);
+  border-radius: 5px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Metric card tones ─── */

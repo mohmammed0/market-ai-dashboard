@@ -10,6 +10,7 @@ from backend.app.models import AlertHistory
 from backend.app.services.cached_analysis import get_ranked_analysis_result
 from backend.app.services.decision_support import build_decision_payload
 from backend.app.services.events_calendar import fetch_market_events
+from backend.app.services.live_stream import get_live_stream_snapshot
 from backend.app.services.market_data import fetch_quote_snapshots, get_recent_quote_series, load_history
 from backend.app.services.market_universe import (
     get_market_overview,
@@ -159,6 +160,7 @@ def build_market_terminal_bootstrap(
     explorer = search_market_universe(q=q, exchange=exchange, security_type=security_type, category=category, limit=limit, include_quotes=True)
     snapshot = get_market_symbol_snapshot(normalized_symbol)
     workspace = get_workspace_overview()
+    live_stream = get_live_stream_snapshot([normalized_symbol], poll_interval=3, max_events=120)
     return {
         "overview": get_market_overview(),
         "facets": get_market_universe_facets(),
@@ -166,6 +168,7 @@ def build_market_terminal_bootstrap(
         "selected_snapshot": snapshot,
         "workspace": workspace,
         "session": _session_context(),
+        "live_stream": live_stream.get("stream"),
     }
 
 
@@ -190,6 +193,7 @@ def build_market_terminal_chart(
     data_note = None
 
     if config.get("mode") == "micro":
+        live_stream = get_live_stream_snapshot([normalized_symbol, *compare_list], poll_interval=3, max_events=180)
         fetch_quote_snapshots([normalized_symbol, *compare_list], include_profile=False)
         lookback_minutes = 60 if normalized_range == "TODAY" else 240
         series = get_recent_quote_series(normalized_symbol, bucket_seconds=config["bucket_seconds"], lookback_minutes=lookback_minutes)
@@ -211,6 +215,7 @@ def build_market_terminal_chart(
         ]
         compare_payload = [item for item in compare_payload if item["items"]]
     else:
+        live_stream = get_live_stream_snapshot([normalized_symbol, *compare_list], poll_interval=3, max_events=60)
         history = load_history(normalized_symbol, start_date=start_date, end_date=end_date, interval=config["interval"], persist=True)
         frame = _build_frame(history.get("items", []))
         if config.get("resample_rule") and not frame.empty:
@@ -235,6 +240,8 @@ def build_market_terminal_chart(
         "compare_series": compare_payload,
         "session": _session_context(),
         "data_note": data_note,
+        "live_stream": live_stream.get("stream"),
+        "latest_live_items": live_stream.get("items", []),
     }
 
 
@@ -277,6 +284,7 @@ def build_market_terminal_context(symbol: str, start_date: str | None = None, en
         for row in alert_rows
     ]
     events = fetch_market_events(symbols=[normalized_symbol], limit=4)
+    live_stream = get_live_stream_snapshot([normalized_symbol], poll_interval=3, max_events=120)
     return {
         "symbol": normalized_symbol,
         "decision": decision,
@@ -295,4 +303,6 @@ def build_market_terminal_context(symbol: str, start_date: str | None = None, en
         },
         "alerts": alerts,
         "events": events.get("items", []),
+        "live_stream": live_stream.get("stream"),
+        "latest_live_items": live_stream.get("items", []),
     }

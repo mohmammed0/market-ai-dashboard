@@ -16,7 +16,7 @@ export default function CandidateCard({ item }) {
           <span>{t(`Rank #${item.rank ?? "-"}`)}</span>
           <strong>{symbol}</strong>
         </div>
-        <StatusBadge label={`Conf ${item.confidence ?? "-"}`} tone="accent" />
+        <StatusBadge label={`ثقة ${item.confidence ?? "-"}`} tone="accent" />
       </div>
       <div className="candidate-body">
         <div><span>{t("Signal")}</span><SignalBadge signal={item.signal} /></div>

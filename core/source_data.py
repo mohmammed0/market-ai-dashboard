@@ -93,7 +93,42 @@ def _coerce_history_frame(df: pd.DataFrame, instrument: str) -> pd.DataFrame:
 def _read_csv_frame(csv_path: Path, instrument: str) -> pd.DataFrame:
     if not csv_path.exists():
         return pd.DataFrame()
-    frame = pd.read_csv(csv_path)
+    try:
+        frame = pd.read_csv(csv_path)
+    except pd.errors.ParserError as exc:
+        detail = " ".join(str(exc).split()) or exc.__class__.__name__
+        logger.warning(
+            "source_data.csv_parse_failed symbol=%s path=%s detail=%s",
+            instrument,
+            csv_path,
+            detail,
+        )
+        try:
+            frame = pd.read_csv(csv_path, engine="python", on_bad_lines="skip")
+            logger.warning(
+                "source_data.csv_parse_recovered symbol=%s path=%s recovered_rows=%s",
+                instrument,
+                csv_path,
+                len(frame.index),
+            )
+        except Exception as recovery_exc:
+            recovery_detail = " ".join(str(recovery_exc).split()) or recovery_exc.__class__.__name__
+            logger.warning(
+                "source_data.csv_parse_recovery_failed symbol=%s path=%s detail=%s",
+                instrument,
+                csv_path,
+                recovery_detail,
+            )
+            return pd.DataFrame()
+    except Exception as exc:
+        detail = " ".join(str(exc).split()) or exc.__class__.__name__
+        logger.warning(
+            "source_data.csv_read_failed symbol=%s path=%s detail=%s",
+            instrument,
+            csv_path,
+            detail,
+        )
+        return pd.DataFrame()
     if "date" not in frame.columns:
         return pd.DataFrame()
     return _coerce_history_frame(frame, instrument)

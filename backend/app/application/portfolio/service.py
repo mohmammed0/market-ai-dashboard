@@ -37,7 +37,7 @@ _BROKER_TERMINAL_ORDER_STATUSES = {
 _PORTFOLIO_SOURCE_LABELS = {
     "broker_paper": ("broker", "Broker Paper"),
     "broker_live": ("broker", "Broker Live"),
-    "internal_paper": ("internal", "Internal Simulated Paper"),
+    "internal_paper": ("internal", "Deprecated Internal Snapshot"),
 }
 
 
@@ -342,22 +342,6 @@ def _build_broker_snapshot_view(
 
 def _build_canonical_positions(internal: dict, broker: dict) -> list[PortfolioPosition]:
     raw_positions: list[PortfolioPosition] = []
-    for item in internal.get("items", []):
-        raw_positions.append(
-            PortfolioPosition(
-                portfolio_source="internal_paper",
-                symbol=item["symbol"],
-                side=item["side"],
-                quantity=_safe_float(item.get("quantity")),
-                current_price=item.get("current_price"),
-                market_value=_safe_float(item.get("market_value")),
-                unrealized_pnl=_safe_float(item.get("unrealized_pnl")),
-                realized_pnl=_safe_float(item.get("realized_pnl")),
-                strategy_mode=item.get("strategy_mode"),
-                updated_at=_parse_datetime(item.get("updated_at")),
-            )
-        )
-
     broker_source = "broker_paper" if broker.get("paper", True) else "broker_live"
     for item in broker.get("positions", []):
         raw_positions.append(
@@ -418,7 +402,7 @@ def build_canonical_portfolio_snapshot(
     internal: dict | None = None,
     broker: dict | None = None,
 ) -> PortfolioSnapshot:
-    internal = internal or get_internal_portfolio(limit=500)
+    internal = internal or {}
     broker = broker or get_broker_summary()
     raw_positions = _build_canonical_positions(internal, broker)
 
@@ -454,47 +438,39 @@ def build_canonical_portfolio_snapshot(
 
 
 def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
-    internal = get_internal_portfolio(limit=500)
     broker = get_broker_summary()
-    canonical_snapshot = build_canonical_portfolio_snapshot(internal=internal, broker=broker)
+    canonical_snapshot = build_canonical_portfolio_snapshot(internal={}, broker=broker)
     broker_connected = bool(broker.get("connected"))
     broker_source = "broker_paper" if broker.get("paper", True) else "broker_live"
 
     if broker_connected:
         positions, orders, open_orders, trades, summary = _build_broker_snapshot_view(broker, broker_source)
-        if not _has_meaningful_snapshot_activity(summary, positions, open_orders, trades):
-            internal_positions, internal_orders, internal_open_orders, internal_trades, internal_summary = _build_internal_snapshot_view(
-                internal
-            )
-            if broker_source == "broker_paper" and _has_active_snapshot_book_state(
-                internal_summary,
-                internal_positions,
-                internal_open_orders,
-            ):
-                try:
-                    from backend.app.application.execution.service import sync_internal_positions_from_broker
-
-                    sync_internal_positions_from_broker(strategy_mode="classic")
-                    internal = get_internal_portfolio(limit=500)
-                    internal_positions, internal_orders, internal_open_orders, internal_trades, internal_summary = _build_internal_snapshot_view(
-                        internal
-                    )
-                except Exception:
-                    pass
-            if _has_active_snapshot_book_state(
-                internal_summary,
-                internal_positions,
-                internal_open_orders,
-            ):
-                positions = internal_positions
-                orders = internal_orders
-                open_orders = internal_open_orders
-                trades = internal_trades
-                summary = internal_summary
     else:
-        positions, orders, open_orders, trades, summary = _build_internal_snapshot_view(internal)
+        positions = []
+        orders = []
+        open_orders = []
+        trades = []
+        summary = PortfolioViewSummary(
+            active_source=broker_source,
+            provider=_normalize_text(broker.get("provider"), "none"),
+            connected=False,
+            mode=_normalize_text(broker.get("mode"), "disabled"),
+            open_positions=0,
+            open_orders=0,
+            total_market_value=0.0,
+            invested_cost=0.0,
+            cash_balance=0.0,
+            total_equity=0.0,
+            portfolio_value=0.0,
+            total_unrealized_pnl=0.0,
+            total_realized_pnl=0.0,
+            total_trades=0,
+            starting_cash=0.0,
+            win_rate_pct=None,
+        )
 
-    source_type, source_label = _PORTFOLIO_SOURCE_LABELS.get(summary.active_source, ("internal", "Internal Simulated Paper"))
+    source_type, source_label = _PORTFOLIO_SOURCE_LABELS.get(summary.active_source, ("broker", "Broker Managed"))
+    broker_environment = "external_live" if summary.active_source == "broker_live" else "external_paper"
 
     return PortfolioSnapshotV1(
         generated_at=datetime.utcnow(),
@@ -519,6 +495,13 @@ def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
             "live_execution_enabled": bool(broker.get("live_execution_enabled", False)),
             "order_submission_enabled": bool(broker.get("order_submission_enabled", False)),
             "detail": broker.get("detail", ""),
+            "broker_execution_mode": "broker_managed",
+            "broker_environment": broker_environment,
+            "internal_paper_enabled": False,
+            "account_source": "broker",
+            "position_source": "broker",
+            "order_source": "broker",
+            "execution_source": "broker",
         },
         broker_account=broker.get("account"),
         source_summaries=canonical_snapshot.sources,

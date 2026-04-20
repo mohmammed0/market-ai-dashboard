@@ -12,6 +12,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from backend.app.api.routes import (
     ai_chat_router,
     ai_research_router,
+    analysis_engines_router,
     ai_router,
     alerts_router,
     analyze_router,
@@ -22,6 +23,9 @@ from backend.app.api.routes import (
     broker_router,
     continuous_learning_router,
     dashboard_router,
+    diagnostics_router,
+    portfolio_brain_router,
+    kronos_router,
     events_router,
     execution_router,
     fundamentals_router,
@@ -33,6 +37,8 @@ from backend.app.api.routes import (
     live_router,
     macro_router,
     market_data_router,
+    market_readiness_router,
+    market_session_router,
     market_router,
     market_terminal_router,
     metrics_router,
@@ -85,6 +91,7 @@ from backend.app.db.session import init_db
 from backend.app.services import start_scheduler, stop_scheduler
 from backend.app.services.auth import validate_auth_configuration
 from backend.app.services.continuous_learning import start_continuous_learning
+from backend.app.services.open_telemetry import bootstrap_open_telemetry
 from backend.app.services.stack_validator import log_stack_status
 from backend.app.services.workspace_store import initialize_workspace_defaults
 
@@ -118,10 +125,11 @@ def _sync_runtime_credentials() -> None:
             logger.exception("Failed to sync Telegram credentials from runtime settings.")
 
 
-def _startup_application_services() -> None:
+def _startup_application_services(app: FastAPI | None = None) -> None:
     validate_auth_configuration()
     _sync_runtime_credentials()
     init_db(run_migrations=DATABASE_RUN_MIGRATIONS_ON_STARTUP)
+    otel_status = bootstrap_open_telemetry(app=app)
     try:
         initialize_workspace_defaults()
     except Exception:
@@ -137,6 +145,8 @@ def _startup_application_services() -> None:
         scheduler_startup_enabled=SCHEDULER_STARTUP_ENABLED,
         continuous_learning_runner_role=CONTINUOUS_LEARNING_RUNNER_ROLE,
         continuous_learning_startup_enabled=CONTINUOUS_LEARNING_STARTUP_ENABLED,
+        otel_runtime=otel_status.get("runtime"),
+        otel_active=otel_status.get("active"),
         public_web_origin=PUBLIC_WEB_ORIGIN or None,
         public_api_origin=PUBLIC_API_ORIGIN or None,
         allowed_origins=ALLOWED_ORIGINS,
@@ -203,8 +213,8 @@ def _warm_runtime_caches() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    _startup_application_services()
+async def lifespan(app: FastAPI):
+    _startup_application_services(app=app)
     try:
         yield
     finally:
@@ -306,6 +316,10 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(dashboard_router, prefix="/api")
+    app.include_router(diagnostics_router, prefix="/api")
+    app.include_router(portfolio_brain_router, prefix="/api")
+    app.include_router(analysis_engines_router, prefix="/api")
+    app.include_router(kronos_router, prefix="/api")
     app.include_router(ai_router, prefix="/api")
     app.include_router(ai_research_router, prefix="/api")
     app.include_router(analyze_router, prefix="/api")
@@ -325,6 +339,8 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(jobs_router, prefix="/api")
     app.include_router(market_router, prefix="/api")
     app.include_router(market_data_router, prefix="/api")
+    app.include_router(market_session_router, prefix="/api")
+    app.include_router(market_readiness_router, prefix="/api")
     app.include_router(market_terminal_router, prefix="/api")
     app.include_router(model_lifecycle_router, prefix="/api")
     app.include_router(models_promotion_router, prefix="/api")

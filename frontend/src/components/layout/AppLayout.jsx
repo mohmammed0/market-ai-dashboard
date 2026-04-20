@@ -6,7 +6,7 @@ import { useAppData } from "../../store/AppDataStore";
 const NAV_ITEMS = [
   {
     path: "/",
-    label: "لوحة القيادة",
+    label: "لوحة التحكم",
     section: "الرئيسية",
     hint: "ملخص السوق والمحفظة والذكاء",
     icon: (
@@ -45,7 +45,7 @@ const NAV_ITEMS = [
   },
   {
     path: "/paper-trading",
-    label: "التداول الورقي",
+    label: "التداول التجريبي",
     section: "الرئيسية",
     hint: "المحفظة، الأوامر، والصفقات",
     icon: (
@@ -264,6 +264,18 @@ const NAV_ITEMS = [
     ),
   },
   {
+    path: "/diagnostics/auto-trading",
+    label: "تشخيص التداول",
+    section: "التنفيذ",
+    hint: "سلسلة القرار من الإشارة حتى التنفيذ",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 3v18h18" />
+        <path d="M7 14l4-4 3 3 5-6" />
+      </svg>
+    ),
+  },
+  {
     path: "/broker",
     label: "الوسيط",
     section: "التنفيذ",
@@ -336,8 +348,8 @@ const NAV_ITEMS = [
 const NAV_SECTIONS = [
   { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/paper-trading", "/ai-news"] },
   { label: "التحليل", paths: ["/ranking", "/knowledge"] },
-  { label: "التنفيذ", paths: ["/broker"] },
-  { label: "المنصة", paths: ["/settings"] },
+  { label: "التنفيذ", paths: ["/broker", "/diagnostics/auto-trading"] },
+  { label: "المنصة", paths: ["/brain", "/settings"] },
 ];
 
 function PlatformStatusDots() {
@@ -446,7 +458,7 @@ export default function AppLayout({ children }) {
       <div className="tv-main">
         <header className="tv-topbar">
           <div className="tv-topbar-heading">
-            <span className="tv-topbar-kicker">مركز التشغيل</span>
+            <span className="tv-topbar-kicker">مركز التحكم</span>
             <div className="tv-topbar-title-row">
               <span className="tv-topbar-brand">Market AI</span>
               {activeItem ? (

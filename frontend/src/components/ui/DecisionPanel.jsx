@@ -106,7 +106,7 @@ export default function DecisionPanel({
             <div className="ai-overlay-explanation">
               <div className="ai-overlay-explanation-header">
                 <span className="ai-overlay-explanation-icon">✦</span>
-                <span>تحليل الذكا�� الاصطناعي</span>
+                <span>تحليل الذكاء الاصطناعي</span>
                 {aiLayer.confidence != null && (
                   <span className="ai-overlay-confidence">ثقة AI: {Math.round(aiLayer.confidence)}%</span>
                 )}

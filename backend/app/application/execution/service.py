@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import time
 from uuid import uuid4
 import logging
 import os
+import random
 
 from backend.app.application.broker.service import get_broker_summary
 from backend.app.config import (
-    AUTO_TRADING_MIN_AGREEMENT,
-    AUTO_TRADING_MIN_ENSEMBLE_SCORE,
-    AUTO_TRADING_MIN_SIGNAL_CONFIDENCE,
+    AUTO_TRADING_ADD_LONG_COOLDOWN_MINUTES,
+    AUTO_TRADING_ADD_LONG_MAX_ADDS_PER_SYMBOL_PER_DAY,
+    AUTO_TRADING_ADD_LONG_MAX_POSITION_PCT,
+    AUTO_TRADING_ADD_LONG_MIN_CONFIDENCE,
+    AUTO_TRADING_ADD_LONG_MIN_NOTIONAL,
+    AUTO_TRADING_ADD_LONG_MIN_SCORE,
+    AUTO_TRADING_ADD_LONG_MIN_SHARES,
+    AUTO_TRADING_ALLOW_ADD_TO_EXISTING_LONGS,
     LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL,
 )
 from backend.app.core.date_defaults import analysis_window_iso
@@ -33,13 +39,18 @@ from backend.app.domain.execution.services.order_state_machine import transition
 from backend.app.events.publisher import publish_event
 from backend.app.observability.metrics import emit_counter
 from backend.app.observability.tracing import build_trace_context
+from backend.app.models import PaperTrade
 from backend.app.risk.service import assess_execution_guardrails
 from backend.app.repositories.execution import ExecutionRepository
 from backend.app.repositories.platform_events import PlatformEventRepository
 from backend.app.services.execution_halt import is_halted, get_halt_status
 from backend.app.services.market_data import fetch_quote_snapshots
+from backend.app.services.auto_trade_policy import (
+    is_auto_executable_signal as _policy_is_auto_executable_signal,
+    resolve_auto_trade_gate_config as _policy_resolve_auto_trade_gate_config,
+)
 from backend.app.services.paper_fill_engine import compute_fill
-from backend.app.services.runtime_settings import get_broker_guardrails
+from backend.app.services.runtime_settings import get_auto_trading_config, get_broker_guardrails
 from backend.app.services.signal_runtime import build_smart_analysis, extract_signal_view
 from backend.app.services.storage import session_scope
 from packages.contracts.events.topics import (
@@ -70,53 +81,232 @@ def _is_us_equities_market_open() -> bool:
 
 
 # Broker integration for live order submission
+_RETRYABLE_BROKER_ERROR_MARKERS = {
+    "timeout",
+    "timed out",
+    "temporary",
+    "temporarily",
+    "try again",
+    "unavailable",
+    "connection",
+    "network",
+    "rate limit",
+    "too many requests",
+    "429",
+    "502",
+    "503",
+    "504",
+}
+
+_PERMANENT_BROKER_ERROR_MARKERS = {
+    "insufficient",
+    "invalid",
+    "forbidden",
+    "unauthorized",
+    "rejected",
+    "notional",
+    "buying power",
+    "duplicate",
+}
+
+_NON_RETRY_SKIP_REASONS = {
+    "broker_not_ready",
+}
+
+
+def _retry_classification_from_payload(payload: dict | None) -> tuple[bool, str | None, bool]:
+    body = payload if isinstance(payload, dict) else {}
+    reason = str(
+        body.get("reason")
+        or body.get("error")
+        or body.get("message")
+        or body.get("detail")
+        or ""
+    ).strip()
+    lowered = reason.lower()
+    skip_reason = str(body.get("reason") or "").strip().lower()
+    if skip_reason in _NON_RETRY_SKIP_REASONS:
+        return False, "non_retry_skip_reason", True
+    if lowered and any(marker in lowered for marker in _PERMANENT_BROKER_ERROR_MARKERS):
+        return False, "permanent_failure", True
+    if lowered and any(marker in lowered for marker in _RETRYABLE_BROKER_ERROR_MARKERS):
+        return True, "transient_broker_error", False
+    status = str(body.get("status") or "").strip().lower()
+    if status in {"error", "failed"} and not body.get("ok"):
+        return True, "temporary_submit_failure", False
+    return False, None, False
+
+
+def _compute_retry_backoff_seconds(*, attempt: int, initial_seconds: int, max_seconds: int, multiplier: float) -> int:
+    exponent = max(int(attempt) - 1, 0)
+    value = float(initial_seconds) * (float(multiplier) ** exponent)
+    return max(1, min(int(round(value)), int(max_seconds)))
+
+
 def _submit_to_broker(symbol: str, qty: float, side: str, order_type: str = "market", estimated_price: float | None = None) -> dict | None:
-    """Submit order to broker (Alpaca) if configured and enabled."""
+    """Submit order to broker (Alpaca) with conservative retry/backoff for transient failures."""
     try:
         from backend.app.adapters.broker.base import BrokerOrderIntent
         from backend.app.domain.execution.services.broker_router import route_execution_intent
         from backend.app.services.runtime_settings import get_auto_trading_config
+
         config = get_auto_trading_config()
+        retry_enabled = bool(config.get("execution_retry_enabled", True))
+        retry_max_attempts = max(int(config.get("execution_retry_max_attempts", 2) or 2), 1)
+        retry_initial_backoff_seconds = max(int(config.get("execution_retry_initial_backoff_seconds", 2) or 2), 1)
+        retry_max_backoff_seconds = max(int(config.get("execution_retry_max_backoff_seconds", 20) or 20), 1)
+        retry_backoff_multiplier = max(float(config.get("execution_retry_backoff_multiplier", 2.0) or 2.0), 1.0)
+        retry_jitter_enabled = bool(config.get("execution_retry_jitter_enabled", True))
+        retry_allowed_for_submit = bool(config.get("execution_retry_allowed_for_broker_submit", True))
+
+        attempted_at = datetime.utcnow().isoformat()
+        base_payload = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": side,
+            "retry_enabled": retry_enabled,
+            "retry_max_attempts": retry_max_attempts,
+            "retry_backoff_strategy": "exponential_jitter" if retry_jitter_enabled else "exponential",
+            "broker_submission_attempted_at": attempted_at,
+            "broker_submit_attempt_count": 0,
+            "retry_attempt_count": 0,
+            "retry_eligible": False,
+            "retry_reason": None,
+            "retry_exhausted": False,
+            "permanent_failure": False,
+            "backoff_seconds": 0,
+            "retry_next_attempt_at": None,
+            "last_submit_error": None,
+        }
+
         if not config.get("ready", False):
-            return None
-        paper_24_7 = str(os.environ.get("MARKET_AI_PAPER_TRADING_24_7", "1")).strip().lower() in {"1", "true", "yes", "on"}
-        if paper_24_7 and bool(config.get("alpaca_paper")) and not _is_us_equities_market_open():
-            log_event(
-                logger,
-                logging.INFO,
-                "execution.broker_submit.skipped_market_closed",
-                symbol=symbol,
-                side=side,
-                qty=qty,
-            )
             return {
+                **base_payload,
                 "ok": False,
                 "skipped": True,
-                "reason": "market_closed_paper_24_7",
-                "symbol": symbol,
-                "qty": qty,
-                "side": side,
+                "reason": "broker_not_ready",
+                "permanent_failure": True,
             }
 
-        result = route_execution_intent(
-            BrokerOrderIntent(
+        last_result: dict | None = None
+        current_attempt = 0
+        allowed_attempts = retry_max_attempts if (retry_enabled and retry_allowed_for_submit) else 1
+
+        while current_attempt < allowed_attempts:
+            current_attempt += 1
+            try:
+                result = route_execution_intent(
+                    BrokerOrderIntent(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        order_type=order_type,
+                    ),
+                    broker="alpaca",
+                ) or {}
+            except Exception as exc:
+                result = {"ok": False, "status": "error", "error": str(exc), "reason": "submit_exception"}
+
+            result = dict(result)
+            result.setdefault("symbol", symbol)
+            result.setdefault("qty", qty)
+            result.setdefault("side", side)
+            result["broker_submit_attempt_count"] = current_attempt
+            result["retry_attempt_count"] = max(current_attempt - 1, 0)
+            result["broker_submission_attempted_at"] = attempted_at
+            result["retry_max_attempts"] = allowed_attempts
+            result["retry_backoff_strategy"] = base_payload["retry_backoff_strategy"]
+
+            ok = bool(result.get("ok")) or str(result.get("status") or "").strip().lower() not in {"", "error", "failed"}
+            if ok:
+                result["retry_eligible"] = False
+                result["retry_reason"] = None
+                result["retry_exhausted"] = False
+                result["permanent_failure"] = False
+                result["backoff_seconds"] = 0
+                result["retry_next_attempt_at"] = None
+                # Send Telegram notification
+                _notify_trade(symbol, qty, side, result.get("order", {}))
+                return result
+
+            retry_eligible, retry_reason, permanent_failure = _retry_classification_from_payload(result)
+            result["retry_eligible"] = bool(retry_enabled and retry_allowed_for_submit and retry_eligible and not permanent_failure)
+            result["retry_reason"] = retry_reason
+            result["permanent_failure"] = bool(permanent_failure)
+            result["last_submit_error"] = str(
+                result.get("error")
+                or result.get("reason")
+                or result.get("message")
+                or "broker_submit_failed"
+            )
+
+            last_result = result
+
+            if not result["retry_eligible"] or current_attempt >= allowed_attempts:
+                result["retry_exhausted"] = bool(result["retry_eligible"] and current_attempt >= allowed_attempts)
+                result["retry_next_attempt_at"] = None
+                result["backoff_seconds"] = 0
+                return result
+
+            backoff_seconds = _compute_retry_backoff_seconds(
+                attempt=current_attempt,
+                initial_seconds=retry_initial_backoff_seconds,
+                max_seconds=retry_max_backoff_seconds,
+                multiplier=retry_backoff_multiplier,
+            )
+            jitter_seconds = random.uniform(0.0, min(1.5, backoff_seconds / 2.0)) if retry_jitter_enabled else 0.0
+            sleep_seconds = backoff_seconds + jitter_seconds
+            next_attempt_at = datetime.utcnow() + timedelta(seconds=sleep_seconds)
+            result["backoff_seconds"] = round(sleep_seconds, 3)
+            result["retry_next_attempt_at"] = next_attempt_at.isoformat()
+
+            log_event(
+                logger,
+                logging.WARNING,
+                "execution.broker_submit.retry_scheduled",
                 symbol=symbol,
-                qty=qty,
                 side=side,
-                order_type=order_type,
-            ),
-            broker="alpaca",
-        )
+                qty=qty,
+                attempt=current_attempt,
+                retry_reason=retry_reason,
+                backoff_seconds=round(sleep_seconds, 3),
+            )
+            time.sleep(max(sleep_seconds, 0.0))
 
-        if result.get("ok") or result.get("status") not in {None, "error"}:
-            # Send Telegram notification
-            _notify_trade(symbol, qty, side, result.get("order", {}))
-
-        return result
+        if last_result is not None:
+            return last_result
+        return {
+            **base_payload,
+            "ok": False,
+            "reason": "broker_submit_unknown_failure",
+            "permanent_failure": True,
+        }
     except Exception as exc:
-        log_event(logger, logging.WARNING, "execution.broker_submit.failed",
-                  symbol=symbol, side=side, qty=qty, error=str(exc))
-        return {"ok": False, "error": str(exc)}
+        log_event(
+            logger,
+            logging.WARNING,
+            "execution.broker_submit.failed",
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            error=str(exc),
+        )
+        return {
+            "ok": False,
+            "error": str(exc),
+            "symbol": symbol,
+            "qty": qty,
+            "side": side,
+            "retry_eligible": False,
+            "retry_reason": "submit_exception",
+            "retry_attempt_count": 0,
+            "retry_exhausted": False,
+            "permanent_failure": True,
+            "backoff_seconds": 0,
+            "retry_next_attempt_at": None,
+            "broker_submission_attempted_at": datetime.utcnow().isoformat(),
+            "broker_submit_attempt_count": 1,
+        }
 
 
 def _notify_trade(symbol: str, qty: float, side: str, order: dict):
@@ -290,33 +480,278 @@ def _build_signal_snapshot(symbol: str, strategy_mode: str, result: dict, start_
     )
 
 
-def _is_auto_executable_signal(signal_snapshot: SignalSnapshot) -> bool:
-    """Gate auto-trading to only execute sufficiently strong directional signals."""
-    signal = str(signal_snapshot.signal or "").upper().strip()
-    if signal not in {"BUY", "SELL"}:
-        return False
+def _resolve_auto_trade_gate_config(auto_trading_config: dict | None = None) -> dict:
+    return _policy_resolve_auto_trade_gate_config(auto_trading_config)
 
-    confidence = _safe_float(signal_snapshot.confidence, 0.0)
-    if confidence < float(AUTO_TRADING_MIN_SIGNAL_CONFIDENCE):
-        return False
 
+def _is_auto_executable_signal(signal_snapshot: SignalSnapshot, auto_trading_config: dict | None = None) -> bool:
+    return _policy_is_auto_executable_signal(signal_snapshot, auto_trading_config)
+
+
+def _extract_analysis_score(signal_snapshot: SignalSnapshot) -> tuple[float, bool]:
     payload = signal_snapshot.analysis_payload if isinstance(signal_snapshot.analysis_payload, dict) else {}
     analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
     ensemble = analysis.get("ensemble_output") if isinstance(analysis.get("ensemble_output"), dict) else {}
-
-    if ensemble:
-        score_magnitude = abs(_safe_float(ensemble.get("ensemble_score"), 0.0))
-        if score_magnitude < float(AUTO_TRADING_MIN_ENSEMBLE_SCORE):
-            return False
-
-        agreement_raw = ensemble.get("agreement_ratio")
-        if agreement_raw is not None and _safe_float(agreement_raw, 0.0) < float(AUTO_TRADING_MIN_AGREEMENT):
-            return False
-
-    return True
+    raw_score = None
+    if isinstance(ensemble, dict):
+        raw_score = ensemble.get("ensemble_score")
+    if raw_score is None and isinstance(analysis, dict):
+        raw_score = analysis.get("ensemble_score") or analysis.get("score")
+    if raw_score is None:
+        return (0.0, False)
+    return (abs(_safe_float(raw_score, 0.0)), True)
 
 
-def _build_trade_intents(current_position: PositionState | None, signal_snapshot: SignalSnapshot, quantity: float) -> list[TradeIntent]:
+def _resolve_add_long_config(auto_trading_config: dict | None = None) -> dict:
+    payload = auto_trading_config if isinstance(auto_trading_config, dict) else {}
+    return {
+        "allow": bool(payload.get("allow_add_to_existing_longs", AUTO_TRADING_ALLOW_ADD_TO_EXISTING_LONGS)),
+        "min_confidence": max(_safe_float(payload.get("add_long_min_confidence", AUTO_TRADING_ADD_LONG_MIN_CONFIDENCE), AUTO_TRADING_ADD_LONG_MIN_CONFIDENCE), 0.0),
+        "min_score": max(_safe_float(payload.get("add_long_min_score", AUTO_TRADING_ADD_LONG_MIN_SCORE), AUTO_TRADING_ADD_LONG_MIN_SCORE), 0.0),
+        "max_position_pct": max(_safe_float(payload.get("add_long_max_position_pct", AUTO_TRADING_ADD_LONG_MAX_POSITION_PCT), AUTO_TRADING_ADD_LONG_MAX_POSITION_PCT), 0.0),
+        "max_adds_per_day": max(int(_safe_float(payload.get("add_long_max_adds_per_symbol_per_day", AUTO_TRADING_ADD_LONG_MAX_ADDS_PER_SYMBOL_PER_DAY), AUTO_TRADING_ADD_LONG_MAX_ADDS_PER_SYMBOL_PER_DAY)), 0),
+        "cooldown_minutes": max(int(_safe_float(payload.get("add_long_cooldown_minutes", AUTO_TRADING_ADD_LONG_COOLDOWN_MINUTES), AUTO_TRADING_ADD_LONG_COOLDOWN_MINUTES)), 0),
+        "min_notional": max(_safe_float(payload.get("add_long_min_notional", AUTO_TRADING_ADD_LONG_MIN_NOTIONAL), AUTO_TRADING_ADD_LONG_MIN_NOTIONAL), 0.0),
+        "min_shares": max(_safe_float(payload.get("add_long_min_shares", AUTO_TRADING_ADD_LONG_MIN_SHARES), AUTO_TRADING_ADD_LONG_MIN_SHARES), 0.0),
+    }
+
+
+def _recent_long_trade_activity(symbol: str, strategy_mode: str) -> tuple[int, datetime | None]:
+    now = datetime.utcnow()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_mode = str(strategy_mode or "classic").strip().lower()
+
+    try:
+        with session_scope() as session:
+            adds_today = int(
+                session.query(PaperTrade)
+                .filter(
+                    PaperTrade.symbol == normalized_symbol,
+                    PaperTrade.strategy_mode == normalized_mode,
+                    PaperTrade.side == "LONG",
+                    PaperTrade.action == "ADD",
+                    PaperTrade.created_at >= day_start,
+                    PaperTrade.created_at < day_end,
+                )
+                .count()
+            )
+            latest_row = (
+                session.query(PaperTrade.created_at)
+                .filter(
+                    PaperTrade.symbol == normalized_symbol,
+                    PaperTrade.strategy_mode == normalized_mode,
+                    PaperTrade.side == "LONG",
+                    PaperTrade.action.in_(["OPEN", "ADD"]),
+                )
+                .order_by(PaperTrade.created_at.desc())
+                .first()
+            )
+        return adds_today, (latest_row[0] if latest_row else None)
+    except Exception:
+        return 0, None
+
+
+def _map_add_guardrail_block_code(guardrails: dict) -> tuple[str, str]:
+    reasons = guardrails.get("blocking_reasons") or []
+    reason_text = " ".join(str(item or "") for item in reasons)
+    if guardrails.get("blocked_reason"):
+        reason_text = f"{reason_text} {guardrails.get('blocked_reason')}".strip()
+    lowered = reason_text.lower()
+
+    if "cash" in lowered or "available" in lowered or "insufficient" in lowered:
+        return "add_blocked_by_cash", reason_text or "Insufficient cash to add to existing long."
+    if "market" in lowered and "closed" in lowered:
+        return "add_blocked_by_market_hours", reason_text or "Market/session guardrail blocked add order."
+    return "add_blocked_by_risk", reason_text or "Risk guardrail blocked add order."
+
+
+def _build_add_long_decision(
+    *,
+    current_position: PositionState,
+    signal_snapshot: SignalSnapshot,
+    quantity: float,
+    auto_trading_config: dict | None,
+) -> dict:
+    add_cfg = _resolve_add_long_config(auto_trading_config)
+    symbol = signal_snapshot.symbol
+    strategy_mode = signal_snapshot.strategy_mode
+    price = max(_safe_float(signal_snapshot.price, 0.0), 0.0)
+    confidence = max(_safe_float(signal_snapshot.confidence, 0.0), 0.0)
+    score_abs, score_present = _extract_analysis_score(signal_snapshot)
+
+    current_qty = max(_safe_float(current_position.quantity, 0.0), 0.0)
+    summary = {}
+    try:
+        portfolio_payload = get_internal_portfolio(limit=500)
+        summary = portfolio_payload.get("summary", {}) if isinstance(portfolio_payload, dict) else {}
+    except Exception:
+        summary = {}
+
+    portfolio_value = max(
+        _safe_float(summary.get("total_equity") or summary.get("portfolio_value"), 0.0),
+        0.0,
+    )
+    available_cash = max(_safe_float(summary.get("cash_balance"), 0.0), 0.0)
+    current_position_value = max(current_qty * price, 0.0)
+    current_position_pct = round((current_position_value / portfolio_value) * 100.0, 4) if portfolio_value > 0 else 0.0
+
+    base_notional = max(
+        _safe_float((auto_trading_config or {}).get("notional_per_trade"), 0.0),
+        0.0,
+    )
+    max_position_pct = max(_safe_float(add_cfg.get("max_position_pct"), AUTO_TRADING_ADD_LONG_MAX_POSITION_PCT), 0.0)
+    if portfolio_value > 0 and base_notional > 0:
+        base_target_pct = min((base_notional / portfolio_value) * 100.0, max_position_pct)
+    elif max_position_pct > 0:
+        base_target_pct = max_position_pct * 0.45
+    else:
+        base_target_pct = 0.0
+
+    min_conf = max(_safe_float(add_cfg.get("min_confidence"), 0.0), 0.0)
+    min_score = max(_safe_float(add_cfg.get("min_score"), 0.0), 0.0)
+
+    conf_span = max(100.0 - min_conf, 1.0)
+    conf_factor = min(max((confidence - min_conf) / conf_span, 0.0), 1.0)
+    if score_present:
+        score_span = max(1.0 - min_score, 1e-6)
+        score_factor = min(max((score_abs - min_score) / score_span, 0.0), 1.0)
+    else:
+        score_factor = conf_factor
+    conviction = max(conf_factor, score_factor)
+
+    dynamic_target_pct = max_position_pct * (0.45 + 0.55 * conviction) if max_position_pct > 0 else 0.0
+    target_position_pct = min(max_position_pct, max(base_target_pct, dynamic_target_pct)) if max_position_pct > 0 else base_target_pct
+    target_position_value = (portfolio_value * target_position_pct / 100.0) if portfolio_value > 0 else max(base_notional, quantity * price, current_position_value)
+    addable_value = max(target_position_value - current_position_value, 0.0)
+
+    context = {
+        "current_position_value": round(current_position_value, 4),
+        "current_position_pct": round(current_position_pct, 4),
+        "target_position_value": round(target_position_value, 4),
+        "target_position_pct": round(target_position_pct, 4),
+        "addable_value": round(addable_value, 4),
+        "analysis_score": round(score_abs, 4),
+        "confidence": round(confidence, 4),
+        "portfolio_value": round(portfolio_value, 4),
+        "available_cash": round(available_cash, 4),
+        "proposed_add_qty": 0.0,
+        "add_block_reason": None,
+    }
+
+    def _blocked(code: str, detail: str) -> dict:
+        context["add_block_reason"] = code
+        return {
+            "intent": "NONE",
+            "quantity": 0.0,
+            "reason_code": code,
+            "reason": detail,
+            "metadata": dict(context),
+        }
+
+    if not add_cfg.get("allow", True):
+        return _blocked("existing_long_position_no_add", "Adding to existing LONG positions is disabled by runtime settings.")
+    if price <= 0:
+        return _blocked("add_price_unavailable", "ADD_LONG skipped because price is unavailable.")
+
+    if confidence < min_conf or (score_present and score_abs < min_score):
+        return _blocked(
+            "insufficient_add_conviction",
+            f"ADD_LONG skipped because conviction is below threshold (confidence={confidence:.2f}, score={score_abs:.4f}).",
+        )
+
+    if addable_value <= 1e-6:
+        return _blocked("at_target_position_size", "ADD_LONG skipped because current position is already at or above target size.")
+
+    min_notional = max(_safe_float(add_cfg.get("min_notional"), 0.0), 0.0)
+    if min_notional > 0 and addable_value < min_notional:
+        return _blocked("add_qty_below_minimum", "ADD_LONG skipped because addable value is below minimum notional threshold.")
+
+    max_adds_per_day = max(int(add_cfg.get("max_adds_per_day", 0) or 0), 0)
+    adds_today, latest_long_trade_at = _recent_long_trade_activity(symbol, strategy_mode)
+    context["adds_today"] = adds_today
+    context["latest_long_trade_at"] = latest_long_trade_at.isoformat() if latest_long_trade_at else None
+
+    if max_adds_per_day > 0 and adds_today >= max_adds_per_day:
+        return _blocked("add_daily_limit_reached", f"ADD_LONG skipped because daily add limit reached ({adds_today}/{max_adds_per_day}).")
+
+    cooldown_minutes = max(int(add_cfg.get("cooldown_minutes", 0) or 0), 0)
+    if cooldown_minutes > 0 and latest_long_trade_at is not None:
+        elapsed_seconds = max((datetime.utcnow() - latest_long_trade_at).total_seconds(), 0.0)
+        elapsed_minutes = elapsed_seconds / 60.0
+        if elapsed_minutes < cooldown_minutes:
+            remaining = max(cooldown_minutes - elapsed_minutes, 0.0)
+            context["cooldown_remaining_minutes"] = round(remaining, 2)
+            return _blocked("add_cooldown_active", f"ADD_LONG cooldown active; {remaining:.1f} minutes remaining.")
+
+    trading_mode = str((auto_trading_config or {}).get("trading_mode") or _current_trading_mode()).strip().lower()
+    margin_enabled = trading_mode == "margin"
+    context["trading_mode"] = "margin" if margin_enabled else "cash"
+
+    if margin_enabled:
+        effective_add_value = max(addable_value, 0.0)
+        if available_cash <= 0:
+            context["cash_warning"] = "margin_buying_power_required"
+    else:
+        cash_buffered = max(available_cash * 0.995, 0.0)
+        if cash_buffered <= 0:
+            return _blocked("add_blocked_by_cash", "ADD_LONG skipped because available cash is zero.")
+
+        effective_add_value = min(addable_value, cash_buffered)
+        if effective_add_value <= 0:
+            return _blocked("add_blocked_by_cash", "ADD_LONG skipped because available cash leaves no add capacity.")
+
+    raw_qty = effective_add_value / price if price > 0 else 0.0
+    proposed_qty = float(int(raw_qty))
+    min_shares = max(_safe_float(add_cfg.get("min_shares"), 0.0), 0.0)
+    if min_shares > 0 and proposed_qty < min_shares:
+        context["proposed_add_qty"] = round(proposed_qty, 4)
+        return _blocked("add_qty_below_minimum", "ADD_LONG skipped because calculated add quantity is below minimum shares.")
+
+    proposed_notional = proposed_qty * price
+    if min_notional > 0 and proposed_notional < min_notional:
+        context["proposed_add_qty"] = round(proposed_qty, 4)
+        return _blocked("add_qty_below_minimum", "ADD_LONG skipped because calculated notional is below minimum threshold.")
+
+    if proposed_qty <= 0:
+        return _blocked("add_qty_below_minimum", "ADD_LONG skipped because calculated quantity is zero.")
+
+    guardrails = assess_execution_guardrails(
+        intent="ADD_LONG",
+        side="BUY",
+        symbol=symbol,
+        quantity=proposed_qty,
+        price=price,
+        available_cash=available_cash,
+        current_side=current_position.side,
+        current_quantity=current_position.quantity,
+        trading_mode=_current_trading_mode(),
+    )
+    if not bool(guardrails.get("allowed", False)):
+        code, detail = _map_add_guardrail_block_code(guardrails)
+        return _blocked(code, detail)
+
+    context["proposed_add_qty"] = round(proposed_qty, 4)
+    context["add_block_reason"] = "add_long_allowed"
+    return {
+        "intent": "ADD_LONG",
+        "quantity": round(proposed_qty, 4),
+        "reason_code": "add_long_allowed",
+        "reason": (
+            f"ADD_LONG approved: current={current_position_pct:.2f}% target={target_position_pct:.2f}% "
+            f"addable=${addable_value:.2f} qty={proposed_qty:.0f}."
+        ),
+        "metadata": context,
+    }
+
+
+def _build_trade_intents(
+    current_position: PositionState | None,
+    signal_snapshot: SignalSnapshot,
+    quantity: float,
+    auto_trading_config: dict | None = None,
+) -> list[TradeIntent]:
     quantity = max(_safe_float(quantity, 1.0), 1.0)
     signal = signal_snapshot.signal
     price = signal_snapshot.price
@@ -324,22 +759,217 @@ def _build_trade_intents(current_position: PositionState | None, signal_snapshot
     strategy_mode = signal_snapshot.strategy_mode
     intents: list[TradeIntent] = []
     margin_enabled = _is_margin_trading_enabled()
+    trade_direction = _resolve_auto_trade_gate_config(auto_trading_config)["trade_direction"]
+    allow_long_entries = trade_direction in {"both", "long_only"}
+    allow_short_entries = trade_direction in {"both", "short_only"}
 
     if signal == "BUY":
         if current_position and current_position.side == "SHORT":
             intents.append(TradeIntent(intent="CLOSE_SHORT", symbol=symbol, strategy_mode=strategy_mode, side="SHORT", quantity=current_position.quantity, execution_price=price, reason="Signal BUY closed short"))
-        if not current_position or current_position.side != "LONG":
+
+        if allow_long_entries and current_position and current_position.side == "LONG":
+            add_plan = _build_add_long_decision(
+                current_position=current_position,
+                signal_snapshot=signal_snapshot,
+                quantity=quantity,
+                auto_trading_config=auto_trading_config,
+            )
+            if add_plan.get("intent") == "ADD_LONG":
+                intents.append(
+                    TradeIntent(
+                        intent="ADD_LONG",
+                        symbol=symbol,
+                        strategy_mode=strategy_mode,
+                        side="LONG",
+                        quantity=max(_safe_float(add_plan.get("quantity"), 0.0), 0.0),
+                        execution_price=price,
+                        reason=str(add_plan.get("reason") or "ADD_LONG approved"),
+                        metadata=add_plan.get("metadata") if isinstance(add_plan.get("metadata"), dict) else {},
+                    )
+                )
+            else:
+                intents.append(
+                    TradeIntent(
+                        intent="NONE",
+                        symbol=symbol,
+                        strategy_mode=strategy_mode,
+                        quantity=0.0,
+                        execution_price=price,
+                        reason=str(add_plan.get("reason") or "Signal BUY on existing LONG produced no add action."),
+                        metadata=add_plan.get("metadata") if isinstance(add_plan.get("metadata"), dict) else {},
+                    )
+                )
+        elif allow_long_entries and (not current_position or current_position.side != "LONG"):
             intents.append(TradeIntent(intent="OPEN_LONG", symbol=symbol, strategy_mode=strategy_mode, side="LONG", quantity=quantity, execution_price=price, reason="Signal BUY opened long"))
+        elif not intents:
+            intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal BUY ignored because short-only mode blocks new long entries"))
     elif signal == "SELL":
         if current_position and current_position.side == "LONG":
             intents.append(TradeIntent(intent="CLOSE_LONG", symbol=symbol, strategy_mode=strategy_mode, side="LONG", quantity=current_position.quantity, execution_price=price, reason="Signal SELL closed long"))
-        if margin_enabled and (not current_position or current_position.side != "SHORT"):
+        if allow_short_entries and margin_enabled and (not current_position or current_position.side != "SHORT"):
             intents.append(TradeIntent(intent="OPEN_SHORT", symbol=symbol, strategy_mode=strategy_mode, side="SHORT", quantity=quantity, execution_price=price, reason="Signal SELL opened short in margin mode"))
-        elif not current_position or current_position.side != "LONG":
-            intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal SELL ignored because no long position is open"))
+        elif not intents:
+            reason = "Signal SELL ignored because no long position is open"
+            if not allow_short_entries:
+                reason = "Signal SELL ignored because long-only mode blocks new short entries"
+            elif not margin_enabled:
+                reason = "Signal SELL ignored because margin mode is disabled and no long position is open"
+            intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason=reason))
     else:
         intents.append(TradeIntent(intent="NONE", symbol=symbol, strategy_mode=strategy_mode, quantity=0.0, execution_price=price, reason="Signal HOLD generated no execution intent"))
     return intents
+
+
+def _build_trade_intents_from_decision(
+    current_position: PositionState | None,
+    signal_snapshot: SignalSnapshot,
+    fallback_quantity: float,
+    decision_override: dict | None,
+    auto_trading_config: dict | None = None,
+) -> list[TradeIntent]:
+    override = decision_override if isinstance(decision_override, dict) else {}
+    requested_action = str(override.get("requested_execution_action") or "").strip().upper()
+    requested_qty = max(_safe_float(override.get("approved_order_qty"), _safe_float(override.get("proposed_order_qty"), 0.0)), 0.0)
+    quantity = requested_qty if requested_qty > 0 else max(_safe_float(fallback_quantity, 1.0), 1.0)
+    priority_band = str(override.get("execution_priority_band") or "deferred").strip().lower() or "deferred"
+    metadata = {
+        "requested_execution_action": requested_action or None,
+        "decision_outcome_code": str(override.get("decision_outcome_code") or "").strip().lower() or None,
+        "decision_outcome_detail": str(override.get("decision_outcome_detail") or "").strip() or None,
+        "target_position_pct": _safe_float(override.get("target_position_pct"), 0.0),
+        "current_position_pct": _safe_float(override.get("current_position_pct"), 0.0),
+        "desired_delta_pct": _safe_float(override.get("desired_delta_pct"), 0.0),
+        "opportunity_score": _safe_float(override.get("opportunity_score"), 0.0),
+        "conviction_tier": str(override.get("conviction_tier") or "").strip().lower() or None,
+        "execution_priority_band": priority_band,
+        "execution_priority": str(override.get("execution_priority") or ("high" if priority_band in {"critical", "high"} else "normal" if priority_band == "normal" else "low")).strip().lower(),
+        "order_style_preference": str(override.get("order_style_preference") or "market").strip().lower(),
+        "execution_skip_reason": str(override.get("execution_skip_reason") or "").strip().lower() or None,
+        "funded_partially": bool(override.get("funded_partially", False)),
+        "funding_status": str(override.get("funding_status") or "").strip().lower() or None,
+        "funding_ratio": _safe_float(override.get("funding_ratio"), 0.0),
+        "partial_funding_reason": str(override.get("partial_funding_reason") or "").strip() or None,
+        "requested_order_qty": _safe_float(override.get("requested_order_qty"), 0.0),
+        "approved_order_qty": _safe_float(override.get("approved_order_qty"), 0.0),
+    }
+    symbol = signal_snapshot.symbol
+    strategy_mode = signal_snapshot.strategy_mode
+    price = signal_snapshot.price
+
+    if requested_action in {"", "HOLD", "NONE"}:
+        reason = str(override.get("decision_outcome_detail") or "Portfolio allocator selected HOLD.")
+        return [
+            TradeIntent(
+                intent="NONE",
+                symbol=symbol,
+                strategy_mode=strategy_mode,
+                quantity=0.0,
+                execution_price=price,
+                reason=reason,
+                metadata=metadata,
+            )
+        ]
+
+    if requested_action == "OPEN_LONG":
+        if current_position and current_position.side == "LONG":
+            requested_action = "ADD_LONG"
+        elif current_position and current_position.side == "SHORT":
+            return [
+                TradeIntent(
+                    intent="CLOSE_SHORT",
+                    symbol=symbol,
+                    strategy_mode=strategy_mode,
+                    side="SHORT",
+                    quantity=float(current_position.quantity or 0.0),
+                    execution_price=price,
+                    reason=str(override.get("decision_outcome_detail") or "Portfolio allocator closes SHORT before LONG entry."),
+                    metadata=metadata,
+                ),
+                TradeIntent(
+                    intent="OPEN_LONG",
+                    symbol=symbol,
+                    strategy_mode=strategy_mode,
+                    side="LONG",
+                    quantity=max(quantity, 1.0),
+                    execution_price=price,
+                    reason=str(override.get("decision_outcome_detail") or "Portfolio allocator approved OPEN_LONG."),
+                    metadata=metadata,
+                ),
+            ]
+
+    if requested_action == "ADD_LONG":
+        if not current_position or current_position.side != "LONG":
+            requested_action = "OPEN_LONG"
+
+    if requested_action in {"OPEN_LONG", "ADD_LONG"}:
+        return [
+            TradeIntent(
+                intent=requested_action,
+                symbol=symbol,
+                strategy_mode=strategy_mode,
+                side="LONG",
+                quantity=max(quantity, 1.0),
+                execution_price=price,
+                reason=str(override.get("decision_outcome_detail") or f"Portfolio allocator approved {requested_action}."),
+                metadata=metadata,
+            )
+        ]
+
+    if requested_action in {"REDUCE_LONG", "EXIT_LONG"}:
+        if not current_position or current_position.side != "LONG":
+            return [
+                TradeIntent(
+                    intent="NONE",
+                    symbol=symbol,
+                    strategy_mode=strategy_mode,
+                    quantity=0.0,
+                    execution_price=price,
+                    reason="Requested long reduction/exit but no open LONG position exists.",
+                    metadata=metadata,
+                )
+            ]
+        current_qty = max(_safe_float(current_position.quantity, 0.0), 0.0)
+        if current_qty <= 0:
+            return [
+                TradeIntent(
+                    intent="NONE",
+                    symbol=symbol,
+                    strategy_mode=strategy_mode,
+                    quantity=0.0,
+                    execution_price=price,
+                    reason="Requested long reduction/exit but current quantity is zero.",
+                    metadata=metadata,
+                )
+            ]
+
+        close_qty = current_qty if requested_action == "EXIT_LONG" else min(max(quantity, 1.0), current_qty)
+        return [
+            TradeIntent(
+                intent="CLOSE_LONG",
+                symbol=symbol,
+                strategy_mode=strategy_mode,
+                side="LONG",
+                quantity=round(close_qty, 4),
+                execution_price=price,
+                reason=str(override.get("decision_outcome_detail") or f"Portfolio allocator approved {requested_action}."),
+                metadata={
+                    **metadata,
+                    "requested_execution_action": requested_action,
+                },
+            )
+        ]
+
+    return [
+        TradeIntent(
+            intent="NONE",
+            symbol=symbol,
+            strategy_mode=strategy_mode,
+            quantity=0.0,
+            execution_price=price,
+            reason=f"Unsupported portfolio decision action: {requested_action}",
+            metadata=metadata,
+        )
+    ]
 
 
 def _get_internal_cash_balance() -> float:
@@ -664,7 +1294,7 @@ def _apply_trade_intent(
             symbol=intent.symbol,
             strategy_mode=intent.strategy_mode,
             correlation_id=correlation_id,
-            payload={"intent": intent.intent, "reason": intent.reason},
+            payload={"intent": intent.intent, "reason": intent.reason, "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {}},
         ))
         return
 
@@ -672,7 +1302,7 @@ def _apply_trade_intent(
     # Paper fill simulation — slippage, spread, fee, partial fill
     # OPEN_LONG / CLOSE_SHORT are buy-side; OPEN_SHORT / CLOSE_LONG are sell-side.
     # ------------------------------------------------------------------
-    fill_side = "BUY" if intent.intent in {"OPEN_LONG", "CLOSE_SHORT"} else "SELL"
+    fill_side = "BUY" if intent.intent in {"OPEN_LONG", "ADD_LONG", "CLOSE_SHORT"} else "SELL"
     fill = compute_fill(
         side=fill_side,
         quantity=intent.quantity,
@@ -711,6 +1341,7 @@ def _apply_trade_intent(
         available_cash=_get_internal_cash_balance(),
         current_side=None if current_position is None else current_position.side,
         current_quantity=None if current_position is None else current_position.quantity,
+        trading_mode=_current_trading_mode(),
     )
     risk_snapshot = {
         "fill": fill_audit,
@@ -738,6 +1369,7 @@ def _apply_trade_intent(
             correlation_id=correlation_id,
             payload={
                 "intent": intent.intent,
+                "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
                 "blocked_reason": guardrails["blocked_reason"],
                 "blocking_reasons": guardrails.get("blocking_reasons", []),
                 "warnings": guardrails.get("warnings", []),
@@ -793,6 +1425,7 @@ def _apply_trade_intent(
                 "intent": intent.intent,
                 "strategy_mode": intent.strategy_mode,
                 "reason": intent.reason,
+                "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
                 "fill_preview": fill_audit,
             },
         )
@@ -812,19 +1445,52 @@ def _apply_trade_intent(
             "order_type": "market",
             "strategy_mode": intent.strategy_mode,
             "intent": intent.intent,
+            "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
         },
     )
 
     if intent.intent in {"CLOSE_LONG", "CLOSE_SHORT"} and current_row is not None:
-        close_qty = fill_qty if fill_qty > 0 else float(current_row.quantity or 0.0)
+        current_qty = max(_safe_float(getattr(current_row, "quantity", 0.0), 0.0), 0.0)
+        close_qty = fill_qty if fill_qty > 0 else current_qty
+        close_qty = min(max(close_qty, 0.0), current_qty)
         sign = 1 if current_row.side == "LONG" else -1
         gross_pnl = round((fill_price - float(current_row.avg_entry_price or 0.0)) * close_qty * sign, 4)
         # Fees reduce realized P&L on close
         realized = round(gross_pnl - fill.fee_amount, 4)
-        repo.close_position(current_row, current_price=fill_price, realized_pnl=realized)
+
+        remaining_qty = round(max(current_qty - close_qty, 0.0), 4)
+        is_partial_close = remaining_qty > 1e-9
+        if is_partial_close:
+            existing_realized = _safe_float(getattr(current_row, "realized_pnl", 0.0), 0.0)
+            repo.upsert_position(
+                symbol=current_row.symbol,
+                strategy_mode=current_row.strategy_mode,
+                side=current_row.side,
+                quantity=remaining_qty,
+                avg_entry_price=_safe_float(getattr(current_row, "avg_entry_price", fill_price), fill_price),
+                current_price=fill_price,
+                market_value=round(fill_price * remaining_qty, 4),
+                unrealized_pnl=0.0,
+                realized_pnl=round(existing_realized + realized, 4),
+                status="OPEN",
+                stop_loss_price=getattr(current_row, "stop_loss_price", None),
+                trailing_stop_pct=getattr(current_row, "trailing_stop_pct", None),
+                trailing_stop_price=getattr(current_row, "trailing_stop_price", None),
+                high_water_mark=getattr(current_row, "high_water_mark", None),
+            )
+        else:
+            repo.close_position(current_row, current_price=fill_price, realized_pnl=realized)
+
+        requested_action = str((intent.metadata or {}).get("requested_execution_action") or "").strip().upper()
+        trade_action = "CLOSE"
+        if is_partial_close and requested_action in {"REDUCE_LONG"}:
+            trade_action = "REDUCE"
+        elif is_partial_close and current_row.side == "SHORT":
+            trade_action = "COVER"
+
         repo.append_trade(TradeRecord(
             symbol=intent.symbol, strategy_mode=intent.strategy_mode,
-            action="CLOSE", side=current_row.side, quantity=close_qty,
+            action=trade_action, side=current_row.side, quantity=close_qty,
             price=fill_price, realized_pnl=realized, notes=fill_notes,
         ))
         # Submit SELL to Alpaca broker
@@ -846,6 +1512,7 @@ def _apply_trade_intent(
                 "qty": close_qty,
                 "broker": broker_info,
                 "execution_state": ExecutionStatus.SUBMITTED.value,
+                "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
             },
         )
         _record_order_event(
@@ -863,33 +1530,87 @@ def _apply_trade_intent(
                 "fill": fill_audit,
                 "realized_pnl": realized,
                 "broker": broker_info,
+                "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
             },
         )
+        audit_event_type = intent.intent.lower()
+        if is_partial_close and requested_action == "REDUCE_LONG" and intent.intent == "CLOSE_LONG":
+            audit_event_type = "reduce_long"
+        elif requested_action == "EXIT_LONG" and intent.intent == "CLOSE_LONG":
+            audit_event_type = "exit_long"
+
         repo.append_audit_event(ExecutionEventRecord(
-            event_type=intent.intent.lower(), symbol=intent.symbol,
+            event_type=audit_event_type, symbol=intent.symbol,
             strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": close_qty, "realized_pnl": realized, "fill": fill_audit, "broker": broker_info},
+            payload={
+                "price": fill_price,
+                "quantity": close_qty,
+                "remaining_qty": remaining_qty,
+                "partial": bool(is_partial_close),
+                "realized_pnl": realized,
+                "fill": fill_audit,
+                "broker": broker_info,
+                "intent": intent.intent,
+                "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
+            },
         ))
-        _record_portfolio_snapshot_event(repo, correlation_id=correlation_id, snapshot_type="execution_close")
-    elif intent.intent == "OPEN_LONG":
-        # Set trailing stop on new position
-        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
-        trailing_pct = DEFAULT_TRAILING_STOP_PCT
-        trailing_stop = round(fill_price * (1 - trailing_pct / 100.0), 4)
-        repo.upsert_position(
-            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
-            side="LONG", quantity=fill_qty, avg_entry_price=fill_price,
-            current_price=fill_price, market_value=round(fill_price * fill_qty, 4),
-            unrealized_pnl=0.0, realized_pnl=0.0, status="OPEN",
-            trailing_stop_pct=trailing_pct, trailing_stop_price=trailing_stop,
-            high_water_mark=fill_price, stop_loss_price=trailing_stop,
+        _record_portfolio_snapshot_event(
+            repo,
+            correlation_id=correlation_id,
+            snapshot_type="execution_reduce" if is_partial_close else "execution_close",
         )
-        repo.append_trade(TradeRecord(
-            symbol=intent.symbol, strategy_mode=intent.strategy_mode,
-            action="OPEN", side="LONG", quantity=fill_qty,
-            price=fill_price, realized_pnl=0.0, notes=fill_notes,
-        ))
-        # Submit to Alpaca broker
+    elif intent.intent in {"OPEN_LONG", "ADD_LONG"}:
+        from backend.app.services.risk_engine import DEFAULT_TRAILING_STOP_PCT
+
+        is_add_long = bool(intent.intent == "ADD_LONG" and current_row is not None and str(getattr(current_row, "side", "")).upper() == "LONG")
+        existing_qty = max(_safe_float(getattr(current_row, "quantity", 0.0), 0.0), 0.0) if is_add_long else 0.0
+        existing_avg = max(_safe_float(getattr(current_row, "avg_entry_price", 0.0), 0.0), 0.0) if is_add_long else 0.0
+        realized_pnl = _safe_float(getattr(current_row, "realized_pnl", 0.0), 0.0) if is_add_long else 0.0
+
+        total_qty = fill_qty if not is_add_long else round(existing_qty + fill_qty, 4)
+        if is_add_long and total_qty > 0:
+            avg_entry_price = round(((existing_qty * existing_avg) + (fill_qty * fill_price)) / total_qty, 6)
+        else:
+            avg_entry_price = fill_price
+
+        existing_trailing_pct = _safe_float(getattr(current_row, "trailing_stop_pct", 0.0), 0.0) if is_add_long else 0.0
+        trailing_pct = existing_trailing_pct if existing_trailing_pct > 0 else DEFAULT_TRAILING_STOP_PCT
+        existing_hwm = _safe_float(getattr(current_row, "high_water_mark", 0.0), 0.0) if is_add_long else 0.0
+        high_water_mark = max(existing_hwm, fill_price) if is_add_long else fill_price
+        trailing_stop = round(high_water_mark * (1 - trailing_pct / 100.0), 4)
+
+        existing_stop_loss = _safe_float(getattr(current_row, "stop_loss_price", 0.0), 0.0) if is_add_long else 0.0
+        stop_loss_price = round(existing_stop_loss, 4) if existing_stop_loss > 0 else trailing_stop
+
+        repo.upsert_position(
+            symbol=intent.symbol,
+            strategy_mode=intent.strategy_mode,
+            side="LONG",
+            quantity=total_qty,
+            avg_entry_price=avg_entry_price,
+            current_price=fill_price,
+            market_value=round(fill_price * total_qty, 4),
+            unrealized_pnl=0.0,
+            realized_pnl=realized_pnl,
+            status="OPEN",
+            trailing_stop_pct=trailing_pct,
+            trailing_stop_price=trailing_stop,
+            high_water_mark=high_water_mark,
+            stop_loss_price=stop_loss_price,
+        )
+        repo.append_trade(
+            TradeRecord(
+                symbol=intent.symbol,
+                strategy_mode=intent.strategy_mode,
+                action="ADD" if is_add_long else "OPEN",
+                side="LONG",
+                quantity=fill_qty,
+                price=fill_price,
+                realized_pnl=0.0,
+                notes=fill_notes,
+            )
+        )
+
         broker_result = _submit_to_broker(intent.symbol, fill_qty, "BUY", estimated_price=fill_price)
         broker_info = broker_result if broker_result else {"skipped": True}
         _record_order_event(
@@ -925,12 +1646,29 @@ def _apply_trade_intent(
                 "broker": broker_info,
             },
         )
-        repo.append_audit_event(ExecutionEventRecord(
-            event_type="open_long", symbol=intent.symbol,
-            strategy_mode=intent.strategy_mode, correlation_id=correlation_id,
-            payload={"price": fill_price, "quantity": fill_qty, "fill": fill_audit, "broker": broker_info},
-        ))
-        _record_portfolio_snapshot_event(repo, correlation_id=correlation_id, snapshot_type="execution_open")
+        repo.append_audit_event(
+            ExecutionEventRecord(
+                event_type="add_long" if is_add_long else "open_long",
+                symbol=intent.symbol,
+                strategy_mode=intent.strategy_mode,
+                correlation_id=correlation_id,
+                payload={
+                    "price": fill_price,
+                    "quantity": fill_qty,
+                    "position_total_qty": total_qty,
+                    "position_avg_entry_price": avg_entry_price,
+                    "fill": fill_audit,
+                    "broker": broker_info,
+                    "intent": intent.intent,
+                    "intent_metadata": intent.metadata if isinstance(intent.metadata, dict) else {},
+                },
+            )
+        )
+        _record_portfolio_snapshot_event(
+            repo,
+            correlation_id=correlation_id,
+            snapshot_type="execution_add_long" if is_add_long else "execution_open",
+        )
     elif intent.intent == "OPEN_SHORT":
         if not _is_margin_trading_enabled():
             _record_risk_decision_event(
@@ -1022,6 +1760,7 @@ def refresh_signals(
     auto_execute=True,
     quantity=1.0,
     quantity_map: dict[str, float] | None = None,
+    decision_overrides: dict[str, dict] | None = None,
     idempotency_key: str | None = None,
 ):
     resolved_start_date, resolved_end_date = analysis_window_iso(start_date, end_date)
@@ -1072,6 +1811,11 @@ def refresh_signals(
     # -------------------------------------------------------------------------
 
     items = []
+    try:
+        auto_trading_runtime = get_auto_trading_config() if auto_execute else {}
+    except Exception:
+        auto_trading_runtime = {}
+    auto_trade_gate_config = _resolve_auto_trade_gate_config(auto_trading_runtime)
     quote_lookup = _build_quote_lookup(normalized_symbols)
     analyzed_symbols, analysis_concurrency = _collect_symbol_analyses(
         normalized_symbols,
@@ -1095,6 +1839,11 @@ def refresh_signals(
         str(symbol or "").strip().upper(): max(_safe_float(value, quantity), 0.0)
         for symbol, value in (quantity_map or {}).items()
         if str(symbol or "").strip()
+    }
+    normalized_decision_overrides = {
+        str(symbol or "").strip().upper(): payload
+        for symbol, payload in (decision_overrides or {}).items()
+        if str(symbol or "").strip() and isinstance(payload, dict)
     }
 
     for analyzed in analyzed_symbols:
@@ -1134,8 +1883,13 @@ def refresh_signals(
                 if isinstance(mode_output, dict) and mode_output.get("error"):
                     repo.append_alert(AlertRecord(symbol=normalized_symbol, strategy_mode=mode, alert_type="model_status", severity="warning", message=f"{normalized_symbol} {mode} output degraded", payload=mode_output))
 
-                should_auto_execute = auto_execute and signal_snapshot.signal in {"BUY", "SELL"}
-                if should_auto_execute and _is_auto_executable_signal(signal_snapshot):
+                decision_override = normalized_decision_overrides.get(normalized_symbol, {})
+                requested_action_override = str(decision_override.get("requested_execution_action") or "").strip().upper()
+                override_requires_execution = requested_action_override in {"OPEN_LONG", "ADD_LONG", "REDUCE_LONG", "EXIT_LONG"}
+                should_auto_execute = auto_execute and (signal_snapshot.signal in {"BUY", "SELL"} or override_requires_execution)
+                passed_signal_gate = _is_auto_executable_signal(signal_snapshot, auto_trading_runtime)
+
+                if should_auto_execute and (override_requires_execution or passed_signal_gate):
                     effective_quantity = normalized_quantity_map.get(normalized_symbol, quantity)
                     command = ExecutionCommand(
                         symbol=normalized_symbol,
@@ -1146,7 +1900,18 @@ def refresh_signals(
                     )
                     current_row = repo.get_open_position_row(normalized_symbol, mode)
                     current_position = None if current_row is None else PositionState(id=current_row.id, symbol=current_row.symbol, strategy_mode=current_row.strategy_mode, side=current_row.side, quantity=current_row.quantity, avg_entry_price=current_row.avg_entry_price, current_price=current_row.current_price, market_value=current_row.market_value or 0.0, unrealized_pnl=current_row.unrealized_pnl or 0.0, realized_pnl=current_row.realized_pnl or 0.0, status=current_row.status, opened_at=current_row.opened_at, updated_at=current_row.updated_at)
-                    intents = _build_trade_intents(current_position, signal_snapshot, command.quantity)
+
+                    if decision_override:
+                        intents = _build_trade_intents_from_decision(
+                            current_position,
+                            signal_snapshot,
+                            command.quantity,
+                            decision_override,
+                            auto_trading_runtime,
+                        )
+                    else:
+                        intents = _build_trade_intents(current_position, signal_snapshot, command.quantity, auto_trading_runtime)
+
                     for intent in intents:
                         _apply_trade_intent(repo, current_row, intent, correlation_id=correlation_id, signal_id=signal_id)
                         if intent.intent.startswith("CLOSE"):
@@ -1160,13 +1925,14 @@ def refresh_signals(
                             severity="info",
                             message=(
                                 f"{normalized_symbol} auto-execution skipped: signal strength below gate "
-                                f"(min_conf={AUTO_TRADING_MIN_SIGNAL_CONFIDENCE}, "
-                                f"min_score={AUTO_TRADING_MIN_ENSEMBLE_SCORE}, "
-                                f"min_agreement={AUTO_TRADING_MIN_AGREEMENT})."
+                                f"(min_conf={auto_trade_gate_config['min_signal_confidence']}, "
+                                f"min_score={auto_trade_gate_config['min_ensemble_score']}, "
+                                f"min_agreement={auto_trade_gate_config['min_agreement']})."
                             ),
                             payload={
                                 "signal": signal_snapshot.signal,
                                 "confidence": signal_snapshot.confidence,
+                                "trade_direction": auto_trade_gate_config["trade_direction"],
                                 "analysis": signal_snapshot.analysis_payload.get("analysis")
                                 if isinstance(signal_snapshot.analysis_payload, dict)
                                 else None,
@@ -1174,7 +1940,40 @@ def refresh_signals(
                         )
                     )
 
-                items.append({"symbol": normalized_symbol, "strategy_mode": mode, "signal": signal_snapshot.signal, "confidence": signal_snapshot.confidence, "price": signal_snapshot.price, "reasoning": signal_snapshot.reasoning})
+                item_payload = {
+                    "symbol": normalized_symbol,
+                    "strategy_mode": mode,
+                    "signal": signal_snapshot.signal,
+                    "confidence": signal_snapshot.confidence,
+                    "price": signal_snapshot.price,
+                    "reasoning": signal_snapshot.reasoning,
+                }
+                if decision_override:
+                    item_payload.update(
+                        {
+                            "portfolio_brain_requested_action": decision_override.get("requested_execution_action"),
+                            "portfolio_brain_decision_code": decision_override.get("decision_outcome_code"),
+                            "portfolio_brain_decision_detail": decision_override.get("decision_outcome_detail"),
+                            "target_position_pct": decision_override.get("target_position_pct"),
+                            "current_position_pct": decision_override.get("current_position_pct"),
+                            "desired_delta_pct": decision_override.get("desired_delta_pct"),
+                            "opportunity_score": decision_override.get("opportunity_score"),
+                            "conviction_tier": decision_override.get("conviction_tier"),
+                            "execution_priority": decision_override.get("execution_priority"),
+                            "execution_priority_band": decision_override.get("execution_priority_band"),
+                            "funded_partially": decision_override.get("funded_partially"),
+                            "funding_status": decision_override.get("funding_status"),
+                            "funding_ratio": decision_override.get("funding_ratio"),
+                            "partial_funding_reason": decision_override.get("partial_funding_reason"),
+                            "requested_order_qty": decision_override.get("requested_order_qty"),
+                            "approved_order_qty": decision_override.get("approved_order_qty"),
+                            "approved_position_pct": decision_override.get("approved_position_pct"),
+                            "order_style_preference": decision_override.get("order_style_preference"),
+                            "execution_skip_reason": decision_override.get("execution_skip_reason"),
+                            "proposed_order_qty": decision_override.get("proposed_order_qty"),
+                        }
+                    )
+                items.append(item_payload)
         except Exception as exc:
             log_event(logger, logging.WARNING, "execution.refresh.symbol_failed", symbol=normalized_symbol, strategy_mode=mode, error=str(exc), correlation_id=correlation_id)
             with session_scope() as session:
@@ -1206,107 +2005,207 @@ def refresh_signals(
     return {"items": items, "portfolio": portfolio, "alerts": alerts, "signals": signals, "correlation_id": correlation_id}
 
 
+def _broker_active_source(broker: dict) -> str:
+    return "broker_live" if not bool(broker.get("paper", True)) else "broker_paper"
+
+
+def _broker_environment_label(broker: dict) -> str:
+    return "external_live" if not bool(broker.get("paper", True)) else "external_paper"
+
+
+def _normalize_broker_order_record(item: dict, *, broker_source: str, broker_environment: str) -> dict:
+    raw_status = str(item.get("status") or "").strip()
+    order_type = str(item.get("type") or item.get("order_type") or "MARKET").strip().upper()
+    quantity = _safe_float(item.get("qty"), _safe_float(item.get("quantity"), 0.0))
+    filled_qty = _safe_float(item.get("filled_qty"), 0.0)
+    filled_avg_price = _safe_float(item.get("filled_avg_price"), 0.0) or None
+    limit_price = _safe_float(item.get("limit_price"), 0.0) or None
+    return {
+        "id": item.get("id"),
+        "client_order_id": item.get("client_order_id"),
+        "portfolio_source": broker_source,
+        "symbol": str(item.get("symbol") or "").strip().upper(),
+        "side": str(item.get("side") or "").strip().upper(),
+        "order_type": order_type,
+        "type": order_type,
+        "status": raw_status.upper() or "UNKNOWN",
+        "quantity": quantity,
+        "qty": quantity,
+        "filled_qty": filled_qty,
+        "fill_price": filled_avg_price,
+        "filled_avg_price": filled_avg_price,
+        "limit_price": limit_price,
+        "submitted_at": item.get("submitted_at"),
+        "updated_at": item.get("updated_at"),
+        "notes": f"Broker-managed order from the external {broker_environment} account.",
+        "raw_status": raw_status.lower() or None,
+        "execution_source": "broker",
+        "order_source": "broker",
+        "broker_environment": broker_environment,
+        "broker_execution_mode": "broker_managed",
+        "internal_paper_enabled": False,
+    }
+
+
+def _build_broker_managed_trade_items(broker: dict, *, limit: int = 100) -> list[dict]:
+    broker_source = _broker_active_source(broker)
+    broker_environment = _broker_environment_label(broker)
+    items: list[dict] = []
+    for order in list(broker.get("orders") or []):
+        normalized = _normalize_broker_order_record(
+            order,
+            broker_source=broker_source,
+            broker_environment=broker_environment,
+        )
+        raw_status = str(normalized.get("raw_status") or "").lower()
+        if raw_status not in {"filled", "partially_filled"} and float(normalized.get("filled_qty") or 0.0) <= 0:
+            continue
+        items.append(
+            {
+                "id": normalized.get("id"),
+                "portfolio_source": broker_source,
+                "symbol": normalized.get("symbol"),
+                "side": normalized.get("side"),
+                "quantity": float(normalized.get("filled_qty") or normalized.get("qty") or 0.0),
+                "price": normalized.get("filled_avg_price") or 0.0,
+                "realized_pnl": 0.0,
+                "status": normalized.get("status"),
+                "created_at": normalized.get("updated_at") or normalized.get("submitted_at"),
+                "notes": f"Broker-managed fill from the external {broker_environment} account.",
+                "trade_source": "broker",
+                "broker_environment": broker_environment,
+                "internal_paper_enabled": False,
+            }
+        )
+    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return items[:limit]
+
+
 def get_internal_portfolio(limit: int = 500) -> dict:
-    with session_scope() as session:
-        repo = ExecutionRepository(session)
-        return _build_internal_portfolio_snapshot_from_repo(repo, limit=limit)
+    broker = get_broker_summary(refresh=False)
+    broker_source = _broker_active_source(broker)
+    broker_environment = _broker_environment_label(broker)
+    account = broker.get("account") or {}
+    positions: list[dict] = []
+    for index, item in enumerate(list(broker.get("positions") or [])[:limit], start=1):
+        qty = abs(_safe_float(item.get("qty"), 0.0))
+        side = str(item.get("side") or "").strip().upper() or "LONG"
+        if qty <= 0 or side not in {"LONG", "SHORT"}:
+            continue
+        current_price = _safe_float(item.get("current_price"), _safe_float(item.get("avg_entry_price"), 0.0))
+        positions.append(
+            {
+                "id": f"broker-position-{index}",
+                "portfolio_source": broker_source,
+                "symbol": str(item.get("symbol") or "").strip().upper(),
+                "strategy_mode": "broker",
+                "side": side,
+                "quantity": qty,
+                "avg_entry_price": _safe_float(item.get("avg_entry_price"), 0.0),
+                "current_price": current_price,
+                "market_value": abs(_safe_float(item.get("market_value"), current_price * qty)),
+                "unrealized_pnl": _safe_float(item.get("unrealized_pnl"), 0.0),
+                "realized_pnl": 0.0,
+                "status": "OPEN",
+                "stop_loss_price": None,
+                "trailing_stop_pct": None,
+                "trailing_stop_price": None,
+                "high_water_mark": None,
+                "opened_at": None,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+        )
+    trade_items = _build_broker_managed_trade_items(broker, limit=200)
+    total_market_value = round(sum(float(item.get("market_value") or 0.0) for item in positions), 4)
+    total_unrealized_pnl = round(sum(float(item.get("unrealized_pnl") or 0.0) for item in positions), 4)
+    cash_balance = round(_safe_float(account.get("cash"), 0.0), 4)
+    total_equity = round(
+        _safe_float(account.get("equity"), _safe_float(account.get("portfolio_value"), cash_balance + total_market_value)),
+        4,
+    )
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "active_source": broker_source,
+        "broker_managed_only": True,
+        "internal_paper_enabled": False,
+        "account_source": "broker",
+        "position_source": "broker",
+        "order_source": "broker",
+        "execution_source": "broker",
+        "broker_execution_mode": "broker_managed",
+        "broker_environment": broker_environment,
+        "items": positions,
+        "positions": positions,
+        "count": len(positions),
+        "summary": {
+            "active_source": broker_source,
+            "provider": broker.get("provider", "none"),
+            "connected": bool(broker.get("connected")),
+            "mode": broker.get("mode", "paper"),
+            "open_positions": len(positions),
+            "open_orders": len(
+                [
+                    order
+                    for order in list(broker.get("orders") or [])
+                    if str(order.get("status") or "").strip().lower()
+                    not in {"filled", "canceled", "cancelled", "expired", "rejected", "replaced", "suspended"}
+                ]
+            ),
+            "total_market_value": total_market_value,
+            "invested_cost": round(sum(_safe_float(item.get("cost_basis"), 0.0) for item in broker.get("positions") or []), 4),
+            "cash_balance": cash_balance,
+            "total_equity": total_equity,
+            "portfolio_value": round(_safe_float(account.get("portfolio_value"), total_equity), 4),
+            "total_unrealized_pnl": total_unrealized_pnl,
+            "total_realized_pnl": 0.0,
+            "total_trades": len(trade_items),
+            "starting_cash": total_equity,
+            "win_rate_pct": None,
+        },
+    }
 
 
 def sync_internal_positions_from_broker(strategy_mode: str = "classic") -> dict:
-    from backend.app.services.broker.registry import get_broker_provider
+    """Compatibility shim for legacy callers.
 
+    Internal paper positions are no longer synchronized or treated as the
+    authoritative portfolio. The broker account is the only source of truth.
+    """
     normalized_mode = str(strategy_mode or "classic").strip().lower() or "classic"
-    provider = get_broker_provider()
-    positions_payload = provider.get_positions(refresh=True)
-    broker_positions = list(positions_payload.get("items") or [])
-
-    broker_symbols: set[str] = set()
-    synced_symbols: list[str] = []
-    short_symbols: list[str] = []
-    closed_symbols: list[str] = []
-
+    broker = get_broker_summary(refresh=True)
+    broker_positions = list(broker.get("positions") or [])
+    short_symbols = [
+        str(item.get("symbol") or "").strip().upper()
+        for item in broker_positions
+        if str(item.get("side") or "").strip().upper() == "SHORT"
+    ]
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        existing_rows = list(repo.list_open_position_rows())
-
-        for item in broker_positions:
-            symbol = str(item.get("symbol") or "").strip().upper()
-            side = str(item.get("side") or "").strip().upper()
-            quantity = abs(_safe_float(item.get("qty"), 0.0))
-            if not symbol or side not in {"LONG", "SHORT"} or quantity <= 0:
-                continue
-            broker_symbols.add(symbol)
-
-        for row in existing_rows:
-            row_symbol = str(row.symbol or "").strip().upper()
-            if row.strategy_mode != normalized_mode or row_symbol not in broker_symbols:
-                repo.close_position(
-                    row,
-                    current_price=_safe_float(row.current_price, row.avg_entry_price),
-                    realized_pnl=0.0,
-                )
-                closed_symbols.append(row_symbol)
-
-        for item in broker_positions:
-            symbol = str(item.get("symbol") or "").strip().upper()
-            side = str(item.get("side") or "").strip().upper()
-            quantity = abs(_safe_float(item.get("qty"), 0.0))
-            avg_entry_price = _safe_float(item.get("avg_entry_price"), 0.0)
-            current_price = _safe_float(item.get("current_price"), avg_entry_price)
-            if not symbol or side not in {"LONG", "SHORT"} or quantity <= 0:
-                continue
-            market_value = abs(_safe_float(item.get("market_value"), current_price * quantity))
-            unrealized_pnl = _safe_float(item.get("unrealized_pnl"), 0.0)
-            realized_pnl = _safe_float(item.get("realized_pnl"), 0.0)
-            repo.upsert_position(
-                symbol=symbol,
-                strategy_mode=normalized_mode,
-                side=side,
-                quantity=quantity,
-                avg_entry_price=avg_entry_price,
-                current_price=current_price,
-                market_value=market_value,
-                unrealized_pnl=unrealized_pnl,
-                realized_pnl=realized_pnl,
-                status="OPEN",
-            )
-            synced_symbols.append(symbol)
-            if side == "SHORT":
-                short_symbols.append(symbol)
-
         repo.append_audit_event(
             ExecutionEventRecord(
-                event_type="broker_positions_synced",
+                event_type="broker_positions_sync_deprecated",
                 source="broker_sync",
-                portfolio_source="broker_alpaca",
+                portfolio_source=_broker_active_source(broker),
                 strategy_mode=normalized_mode,
                 payload={
-                    "broker_provider": positions_payload.get("provider"),
-                    "synced_symbols": synced_symbols,
+                    "broker_provider": broker.get("provider"),
+                    "positions": len(broker_positions),
                     "short_symbols": short_symbols,
-                    "closed_symbols": closed_symbols,
-                    "count": len(synced_symbols),
+                    "internal_paper_enabled": False,
+                    "detail": "Broker-managed positions are authoritative; internal sync is disabled.",
                 },
             )
         )
-
-    log_event(
-        logger,
-        logging.INFO,
-        "execution.broker_positions_synced",
-        strategy_mode=normalized_mode,
-        positions=len(synced_symbols),
-        short_positions=len(short_symbols),
-        closed_positions=len(closed_symbols),
-    )
     return {
         "ok": True,
         "strategy_mode": normalized_mode,
-        "positions": len(synced_symbols),
+        "positions": len(broker_positions),
         "short_positions": len(short_symbols),
         "short_symbols": short_symbols,
-        "closed_positions": len(closed_symbols),
-        "closed_symbols": closed_symbols,
+        "closed_positions": 0,
+        "closed_symbols": [],
+        "sync_mode": "broker_managed_noop",
+        "internal_paper_enabled": False,
     }
 
 
@@ -1364,9 +2263,16 @@ def _enrich_with_fill_details(item: dict) -> dict:
 
 
 def get_trade_history(limit=100):
-    with session_scope() as session:
-        repo = ExecutionRepository(session)
-        return {"items": [_enrich_with_fill_details(row.model_dump(mode="json")) for row in repo.list_trades(limit=limit)]}
+    broker = get_broker_summary(refresh=False)
+    items = _build_broker_managed_trade_items(broker, limit=limit)
+    return {
+        "items": items,
+        "count": len(items),
+        "trade_source": "broker",
+        "broker_environment": _broker_environment_label(broker),
+        "broker_execution_mode": "broker_managed",
+        "internal_paper_enabled": False,
+    }
 
 
 def _compact_signal(item: dict) -> dict:
@@ -1411,11 +2317,32 @@ def get_execution_audit(limit=100, symbol: str | None = None):
 
 
 def list_paper_orders(limit: int = 100, status: str | None = "OPEN") -> dict:
-    with session_scope() as session:
-        repo = ExecutionRepository(session)
-        rows = repo.list_orders(limit=limit, status=status)
-        items = [_enrich_with_fill_details(row.model_dump(mode="json")) for row in rows]
-        return {"items": items, "count": len(items)}
+    broker = get_broker_summary(refresh=False)
+    broker_source = _broker_active_source(broker)
+    broker_environment = _broker_environment_label(broker)
+    terminal_statuses = {"filled", "canceled", "cancelled", "expired", "rejected", "replaced", "suspended"}
+    items = [
+        _normalize_broker_order_record(
+            item,
+            broker_source=broker_source,
+            broker_environment=broker_environment,
+        )
+        for item in list(broker.get("orders") or [])
+    ]
+    normalized_status = str(status or "").strip().upper()
+    if normalized_status == "OPEN":
+        items = [item for item in items if str(item.get("raw_status") or "").lower() not in terminal_statuses]
+    elif normalized_status:
+        items = [item for item in items if str(item.get("status") or "").upper() == normalized_status]
+    items = items[:limit]
+    return {
+        "items": items,
+        "count": len(items),
+        "order_source": "broker",
+        "broker_environment": broker_environment,
+        "broker_execution_mode": "broker_managed",
+        "internal_paper_enabled": False,
+    }
 
 
 def create_paper_order(
@@ -1459,274 +2386,66 @@ def create_paper_order(
         raise ExecutionHaltedError("Execution is currently halted. Clear the halt before submitting new orders.")
     # -------------------------------------------------------------------------
 
-    # Resolve the client_order_id; use caller-supplied value when provided.
-    resolved_client_order_id = str(client_order_id).strip() if client_order_id else f"paper-{uuid4().hex[:12]}"
+    from backend.app.services.broker.registry import get_broker_provider
 
-    # --- idempotency: return existing order if client_order_id already used --
-    if client_order_id:
-        with session_scope() as session:
-            repo = ExecutionRepository(session)
-            existing_row = repo.get_order_by_client_id(resolved_client_order_id)
-            if existing_row is not None:
-                existing = repo.serialize_order(existing_row)
-                log_event(logger, logging.INFO, "execution.order.deduplicated", client_order_id=resolved_client_order_id, symbol=normalized_symbol)
-                result = existing.model_dump(mode="json")
-                result["deduplicated"] = True
-                return result
-    # -------------------------------------------------------------------------
+    provider = get_broker_provider()
+    broker_status = provider.get_status()
+    if not bool(broker_status.get("connected")):
+        raise ValueError(broker_status.get("detail") or "Broker integration is unavailable.")
 
-    # ------------------------------------------------------------------
-    # Fill simulation for the manual order path
-    # ------------------------------------------------------------------
-    ref_price_val = 0.0
-    bid_val: float | None = None
-    ask_val: float | None = None
-    try:
-        ref_price_val, quote_payload = _latest_price(normalized_symbol)
-        if quote_payload:
-            bid_val = _safe_float(quote_payload.get("bid"), None) or None
-            ask_val = _safe_float(quote_payload.get("ask"), None) or None
-    except Exception:
-        pass
-
-    # For limit orders use limit_price as the reference; market uses last trade.
-    fill_ref = float(limit_price) if normalized_order_type == "limit" and limit_price else ref_price_val
-
-    fill = compute_fill(
+    result = provider.submit_order(
+        symbol=normalized_symbol,
+        qty=float(quantity),
         side=normalized_side,
-        quantity=float(quantity),
-        reference_price=fill_ref,
         order_type=normalized_order_type,
+        time_in_force="day",
         limit_price=float(limit_price) if limit_price else None,
-        bid=bid_val,
-        ask=ask_val,
+        estimated_price=float(limit_price) if limit_price else None,
     )
+    if not bool(result.get("ok")):
+        raise ValueError(result.get("error") or "Broker order submission failed.")
 
-    current_position = None
-    manual_intent = "OPEN_LONG" if normalized_side == "BUY" else "CLOSE_LONG"
+    broker_environment = "external_live" if not bool(broker_status.get("paper", True)) else "external_paper"
+    order_payload = _normalize_broker_order_record(
+        result.get("order") or {},
+        broker_source=_broker_active_source(broker_status),
+        broker_environment=broker_environment,
+    )
+    order_payload.update(
+        {
+            "strategy_mode": strategy_mode,
+            "notes": notes or f"Broker-managed submission routed through the deprecated internal paper endpoint.",
+            "deprecated_internal_paper_route": True,
+            "paper_route_disabled": True,
+            "broker_managed_only": True,
+            "execution_source": "broker",
+            "account_source": "broker",
+            "position_source": "broker",
+            "order_source": "broker",
+        }
+    )
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        current_row = repo.get_any_open_position_row(normalized_symbol)
-        current_position = None if current_row is None else PositionState(
-            id=current_row.id,
-            symbol=current_row.symbol,
-            strategy_mode=current_row.strategy_mode,
-            side=current_row.side,
-            quantity=current_row.quantity,
-            avg_entry_price=current_row.avg_entry_price,
-            current_price=current_row.current_price,
-            market_value=current_row.market_value or 0.0,
-            unrealized_pnl=current_row.unrealized_pnl or 0.0,
-            realized_pnl=current_row.realized_pnl or 0.0,
-            status=current_row.status,
-            opened_at=current_row.opened_at,
-            updated_at=current_row.updated_at,
-        )
-        manual_intent = _derive_order_intent(
-            side=normalized_side,
-            quantity=float(quantity),
-            current_position=current_position,
-        )
-        guardrails = _assess_order_guardrails(
-            side=normalized_side,
-            symbol=normalized_symbol,
-            quantity=float(quantity),
-            estimated_price=fill.fill_price if fill.fill_price > 0 else fill_ref,
-            fee_amount=fill.fee_amount,
-            current_position=current_position,
-        )
-        if not guardrails.get("allowed", False):
-            _record_risk_decision_event(
-                session,
-                signal_id=None,
-                symbol=normalized_symbol,
-                intent=manual_intent,
-                side=normalized_side,
-                decision="rejected",
-                approved_qty=None,
-                reason_codes=guardrails.get("blocking_reasons", []),
-                risk_snapshot={
-                    "guardrails": guardrails,
-                    "fill_preview": fill.to_audit_dict(),
-                    "order_type": normalized_order_type,
-                },
-                correlation_id=trace_id,
-            )
-            repo.append_audit_event(ExecutionEventRecord(
-                event_type="paper_order_guardrails_blocked",
+        repo.append_audit_event(
+            ExecutionEventRecord(
+                event_type="broker_order_submitted_via_compat_route",
                 symbol=normalized_symbol,
                 strategy_mode=strategy_mode,
                 correlation_id=trace_id,
                 payload={
+                    "symbol": normalized_symbol,
                     "side": normalized_side,
                     "quantity": float(quantity),
                     "order_type": normalized_order_type,
-                    "reason": guardrails.get("blocked_reason"),
-                    "blocking_reasons": guardrails.get("blocking_reasons", []),
-                    "warnings": guardrails.get("warnings", []),
-                    "risk_check": guardrails.get("risk_check"),
-                    "cash_check": guardrails.get("cash_check"),
-                },
-            ))
-            raise ValueError(guardrails.get("blocked_reason") or "Execution guardrails blocked the order.")
-
-    # Determine whether the order fills immediately.
-    if normalized_order_type == "market":
-        order_status = "PARTIAL_FILL" if fill.is_partial else "FILLED"
-    elif normalized_order_type == "limit" and ref_price_val > 0 and limit_price:
-        # Limit fills immediately if the current price already satisfies the condition.
-        lp = float(limit_price)
-        cond_met = (normalized_side == "BUY" and ref_price_val <= lp) or (normalized_side == "SELL" and ref_price_val >= lp)
-        order_status = ("PARTIAL_FILL" if fill.is_partial else "FILLED") if cond_met else "OPEN"
-    else:
-        order_status = "OPEN"
-
-    final_execution_state, state_path = _build_create_order_state_path(
-        order_fills_immediately=(order_status != "OPEN"),
-        is_partial_fill=fill.is_partial,
-    )
-    persisted_order_status = _execution_state_to_paper_status(final_execution_state)
-
-    order_notes_parts = [p for p in [notes, fill.to_notes_str() if persisted_order_status != "OPEN" else None] if p]
-    order = PaperOrderRecord(
-        client_order_id=resolved_client_order_id,
-        symbol=normalized_symbol,
-        strategy_mode=strategy_mode,
-        side=normalized_side,
-        order_type=normalized_order_type,
-        quantity=float(quantity),
-        limit_price=None if limit_price is None else float(limit_price),
-        status=persisted_order_status,
-        notes=" | ".join(order_notes_parts) if order_notes_parts else None,
-    )
-    with session_scope() as session:
-        repo = ExecutionRepository(session)
-        platform_repo = PlatformEventRepository(session)
-        created = repo.append_order(order)
-        order_intent_id = _build_order_intent_id(normalized_symbol, normalized_side, trace_id)
-        _record_risk_decision_event(
-            session,
-            signal_id=None,
-            symbol=normalized_symbol,
-            intent=manual_intent,
-            side=normalized_side,
-            decision="accepted",
-            approved_qty=float(quantity),
-            reason_codes=[],
-            risk_snapshot={
-                "fill_preview": fill.to_audit_dict(),
-                "order_type": normalized_order_type,
-                "execution_state": final_execution_state.value,
-            },
-            correlation_id=trace_id,
-        )
-        if hasattr(session, "add"):
-            platform_repo.append_order_intent(
-                order_intent_id=order_intent_id,
-                signal_id=None,
-                broker="simulated",
-                symbol=normalized_symbol,
-                side=normalized_side,
-                qty=float(quantity),
-                order_type=normalized_order_type,
-                time_in_force="day",
-                client_order_id=resolved_client_order_id,
-                idempotency_key=f"{trace_id}:{resolved_client_order_id}",
-                status=final_execution_state.value,
-                correlation_id=trace_id,
-                payload={
-                    "limit_price": None if limit_price is None else float(limit_price),
-                    "strategy_mode": strategy_mode,
-                    "notes": notes,
-                    "fill_preview": fill.to_audit_dict(),
+                    "limit_price": float(limit_price) if limit_price else None,
+                    "broker_environment": broker_environment,
+                    "order": order_payload,
+                    "deprecated_internal_paper_route": True,
+                    "internal_paper_enabled": False,
                 },
             )
-        _record_order_event(
-            session,
-            order_intent_id=order_intent_id,
-            client_order_id=resolved_client_order_id,
-            symbol=normalized_symbol,
-            event_type=EXECUTION_ORDER_INTENT_CREATED,
-            correlation_id=trace_id,
-            payload={
-                "order_intent_id": order_intent_id,
-                "client_order_id": resolved_client_order_id,
-                "symbol": normalized_symbol,
-                "side": normalized_side,
-                "qty": float(quantity),
-                "order_type": normalized_order_type,
-                "limit_price": None if limit_price is None else float(limit_price),
-                "strategy_mode": strategy_mode,
-            },
         )
-        _record_order_event(
-            session,
-            order_intent_id=order_intent_id,
-            client_order_id=resolved_client_order_id,
-            symbol=normalized_symbol,
-            event_type=EXECUTION_ORDER_SUBMITTED,
-            correlation_id=trace_id,
-            payload={
-                "order_intent_id": order_intent_id,
-                "client_order_id": resolved_client_order_id,
-                "symbol": normalized_symbol,
-                "side": normalized_side,
-                "qty": float(quantity),
-                "execution_state": final_execution_state.value,
-                "status": persisted_order_status,
-            },
-        )
-        if persisted_order_status != "OPEN":
-            _record_order_event(
-                session,
-                order_intent_id=order_intent_id,
-                client_order_id=resolved_client_order_id,
-                symbol=normalized_symbol,
-                event_type=EXECUTION_ORDER_ACKNOWLEDGED,
-                correlation_id=trace_id,
-                payload={
-                    "order_intent_id": order_intent_id,
-                    "client_order_id": resolved_client_order_id,
-                    "symbol": normalized_symbol,
-                    "execution_state": final_execution_state.value,
-                    "state_path": state_path,
-                },
-            )
-            _record_order_event(
-                session,
-                order_intent_id=order_intent_id,
-                client_order_id=resolved_client_order_id,
-                symbol=normalized_symbol,
-                event_type=EXECUTION_FILL_RECEIVED,
-                correlation_id=trace_id,
-                payload={
-                    "order_intent_id": order_intent_id,
-                    "client_order_id": resolved_client_order_id,
-                    "symbol": normalized_symbol,
-                    "fill": fill.to_audit_dict(),
-                    "status": persisted_order_status,
-                },
-            )
-        repo.append_audit_event(ExecutionEventRecord(
-            event_type="paper_order_created",
-            symbol=normalized_symbol,
-            strategy_mode=strategy_mode,
-            correlation_id=trace_id,
-            payload={
-                **created.model_dump(mode="json"),
-                "fill": fill.to_audit_dict() if persisted_order_status != "OPEN" else None,
-                "execution_state": final_execution_state.value,
-                "state_path": state_path,
-                "trace_id": trace_id,
-            },
-        ))
-        emit_counter(
-            "paper_orders_created_total",
-            side=normalized_side,
-            order_type=normalized_order_type,
-            status=persisted_order_status,
-        )
-    return created.model_dump(mode="json")
+    return order_payload
 
 
 def preview_paper_order(
@@ -1738,312 +2457,94 @@ def preview_paper_order(
     strategy_mode: str | None = "manual",
     notes: str | None = None,
 ) -> ExecutionPreview:
-    """Phase 1 — compute an execution preview without placing any order.
-
-    Returns an ``ExecutionPreview`` with a ``preview_id`` the caller must pass
-    to ``confirm_paper_order()`` within ``_PREVIEW_TTL_SECONDS`` to actually
-    execute.  No DB writes occur in this function.
-    """
-    from datetime import datetime, timezone  # noqa: PLC0415
-
     normalized_symbol = str(symbol or "").strip().upper()
     normalized_side = str(side or "").strip().upper()
     normalized_order_type = str(order_type or "market").strip().lower()
-
-    blocking_reasons: list[str] = []
-    warnings_list: list[str] = []
-
-    # --- halt check ----------------------------------------------------------
-    halt_info = get_halt_status()
-    halted = bool(halt_info.get("halted"))
-    if halted:
-        blocking_reasons.append(halt_info.get("reason") or "Execution is halted.")
-
-    # --- quote ---------------------------------------------------------------
-    ref_price_val = 0.0
-    bid_val: float | None = None
-    ask_val: float | None = None
-    try:
-        ref_price_val, quote_payload = _latest_price(normalized_symbol)
-        if quote_payload:
-            bid_val = _safe_float(quote_payload.get("bid"), None) or None
-            ask_val = _safe_float(quote_payload.get("ask"), None) or None
-    except Exception:
-        warnings_list.append("Could not fetch live quote; using 0.0 as reference price.")
-
-    fill_ref = float(limit_price) if normalized_order_type == "limit" and limit_price else ref_price_val
-
-    # --- fill simulation -----------------------------------------------------
-    fill = compute_fill(
-        side=normalized_side,
-        quantity=float(quantity),
-        reference_price=fill_ref,
-        order_type=normalized_order_type,
-        limit_price=float(limit_price) if limit_price else None,
-        bid=bid_val,
-        ask=ask_val,
-    )
-
-    # --- risk gate (read-only probe) -----------------------------------------
-    guardrails_check: dict = {
-        "allowed": True,
-        "blocked_reason": None,
-        "blocking_reasons": [],
-        "warnings": [],
-        "risk_check": {"allowed": True, "blocked_reason": None, "warnings": []},
-        "cash_check": {"allowed": True, "blocked_reason": None},
-    }
-    if not halted:
-        try:
-            with session_scope() as session:
-                repo = ExecutionRepository(session)
-                current_row = repo.get_any_open_position_row(normalized_symbol)
-                current_position = None if current_row is None else PositionState(
-                    id=current_row.id,
-                    symbol=current_row.symbol,
-                    strategy_mode=current_row.strategy_mode,
-                    side=current_row.side,
-                    quantity=current_row.quantity,
-                    avg_entry_price=current_row.avg_entry_price,
-                    current_price=current_row.current_price,
-                    market_value=current_row.market_value or 0.0,
-                    unrealized_pnl=current_row.unrealized_pnl or 0.0,
-                    realized_pnl=current_row.realized_pnl or 0.0,
-                    status=current_row.status,
-                    opened_at=current_row.opened_at,
-                    updated_at=current_row.updated_at,
-                )
-            guardrails_check = _assess_order_guardrails(
-                side=normalized_side,
-                symbol=normalized_symbol,
-                quantity=float(quantity),
-                estimated_price=fill.fill_price if fill.fill_price > 0 else fill_ref,
-                fee_amount=fill.fee_amount,
-                current_position=current_position,
-            )
-            for reason in guardrails_check.get("blocking_reasons") or []:
-                if reason and reason not in blocking_reasons:
-                    blocking_reasons.append(reason)
-            for warning in guardrails_check.get("warnings") or []:
-                if warning and warning not in warnings_list:
-                    warnings_list.append(warning)
-        except Exception as exc:
-            warnings_list.append(f"Risk gate check failed: {exc}")
-
-    is_safe = len(blocking_reasons) == 0
-
-    # Side cost: BUY increases cash out, SELL increases cash in
-    estimated_total_cost = round(
-        fill.fill_price * fill.filled_quantity + fill.fee_amount, 4
-    ) if normalized_side == "BUY" else round(
-        fill.fill_price * fill.filled_quantity - fill.fee_amount, 4
-    )
-
-    preview_id = f"prev-{uuid4().hex[:16]}"
+    preview_id = f"deprecated-{uuid4().hex[:16]}"
     trace_id = f"trace-{uuid4().hex[:16]}"
-    expires_ts = time.monotonic() + _PREVIEW_TTL_SECONDS
-    expires_at_str = datetime.now(tz=timezone.utc).strftime(
-        f"%Y-%m-%dT%H:%M:%SZ"
-    )  # approximate wall-clock for display
-
-    preview = ExecutionPreview(
+    reason = (
+        "Internal preview/confirm simulation is disabled. "
+        "The platform now uses broker-managed execution only."
+    )
+    return ExecutionPreview(
         preview_id=preview_id,
         trace_id=trace_id,
         symbol=normalized_symbol,
         side=normalized_side,
         quantity=float(quantity),
         order_type=normalized_order_type,
-        reference_price=ref_price_val,
-        estimated_fill_price=fill.fill_price,
-        estimated_fee=fill.fee_amount,
-        estimated_slippage=fill.slippage_adj,
-        estimated_spread=fill.spread_adj,
-        estimated_total_cost=estimated_total_cost,
-        halt_status=halt_info,
-        risk_check=guardrails_check,
-        is_safe_to_execute=is_safe,
-        blocking_reasons=blocking_reasons,
-        warnings=warnings_list,
-        fill_preview=fill.to_audit_dict(),
-        expires_at=expires_at_str,
+        reference_price=0.0,
+        estimated_fill_price=0.0,
+        estimated_fee=0.0,
+        estimated_slippage=0.0,
+        estimated_spread=0.0,
+        estimated_total_cost=0.0,
+        halt_status=get_halt_status(),
+        risk_check={"allowed": False, "deprecated": True},
+        is_safe_to_execute=False,
+        blocking_reasons=[reason],
+        warnings=["Submit broker-managed orders directly through the broker execution route."],
+        fill_preview={},
+        expires_at=None,
     )
-
-    # Stash params needed for confirm step
-    with _preview_lock:
-        # Evict expired entries opportunistically
-        now_mono = time.monotonic()
-        expired_keys = [k for k, v in _preview_store.items() if v["expires_ts"] < now_mono]
-        for k in expired_keys:
-            del _preview_store[k]
-        _preview_store[preview_id] = {
-            "preview": preview,
-            "trace_id": trace_id,
-            "expires_ts": expires_ts,
-            "params": {
-                "symbol": normalized_symbol,
-                "side": normalized_side,
-                "quantity": float(quantity),
-                "order_type": normalized_order_type,
-                "limit_price": float(limit_price) if limit_price else None,
-                "strategy_mode": strategy_mode,
-                "notes": notes,
-            },
-        }
-
-    log_event(logger, logging.DEBUG, "execution.preview.created",
-              symbol=normalized_symbol, preview_id=preview_id, is_safe=is_safe)
-    return preview
 
 
 def confirm_paper_order(preview_id: str) -> ExecutionConfirmResult:
-    """Phase 2 — confirm a previously computed preview, placing the paper order.
-
-    The preview must exist and must not have expired (TTL = 5 minutes).
-    Returns an ``ExecutionConfirmResult`` describing the placed order.
-    """
-    from datetime import datetime, timezone  # noqa: PLC0415
-
     normalized_preview_id = str(preview_id or "").strip()
     correlation_id = f"confirm-{uuid4().hex[:12]}"
-
-    with _preview_lock:
-        entry = _preview_store.get(normalized_preview_id)
-
-    if entry is None:
-        return ExecutionConfirmResult(
-            client_order_id="",
-            preview_id=normalized_preview_id,
-            symbol="",
-            status="REJECTED",
-            blocked_reason="Preview ID not found or already used.",
-            audit_correlation_id=correlation_id,
-        )
-
-    trace_id = entry.get("trace_id")
-
-    if time.monotonic() > entry["expires_ts"]:
-        with _preview_lock:
-            _preview_store.pop(normalized_preview_id, None)
-        return ExecutionConfirmResult(
-            client_order_id="",
-            preview_id=normalized_preview_id,
-            trace_id=trace_id,
-            symbol=entry["params"]["symbol"],
-            status="REJECTED",
-            blocked_reason="Preview has expired. Request a new preview.",
-            audit_correlation_id=correlation_id,
-        )
-
-    preview: ExecutionPreview = entry["preview"]
-
-    if not preview.is_safe_to_execute:
-        return ExecutionConfirmResult(
-            client_order_id="",
-            preview_id=normalized_preview_id,
-            trace_id=trace_id,
-            symbol=preview.symbol,
-            status="HALTED" if preview.halt_status.get("halted") else "REJECTED",
-            blocked_reason="; ".join(preview.blocking_reasons) or "Execution blocked.",
-            audit_correlation_id=correlation_id,
-        )
-
-    # Consume preview — remove from store so it cannot be double-confirmed
-    with _preview_lock:
-        _preview_store.pop(normalized_preview_id, None)
-
-    params = entry["params"]
-    client_order_id = f"confirm-{normalized_preview_id}"
-
-    try:
-        order_result = create_paper_order(
-            symbol=params["symbol"],
-            side=params["side"],
-            quantity=params["quantity"],
-            order_type=params["order_type"],
-            limit_price=params.get("limit_price"),
-            strategy_mode=params.get("strategy_mode"),
-            notes=f"[preview:{normalized_preview_id}] {params.get('notes') or ''}".strip(),
-            client_order_id=client_order_id,
-            trace_id=trace_id,
-        )
-        status = order_result.get("status", "FILLED")
-        return ExecutionConfirmResult(
-            order_id=order_result.get("id"),
-            client_order_id=order_result.get("client_order_id") or client_order_id,
-            preview_id=normalized_preview_id,
-            trace_id=trace_id,
-            symbol=params["symbol"],
-            status=status,
-            fill_price=order_result.get("fill_price") or preview.estimated_fill_price,
-            filled_quantity=params["quantity"],
-            fee=preview.estimated_fee,
-            is_partial=(status == "PARTIAL_FILL"),
-            audit_correlation_id=correlation_id,
-        )
-    except ExecutionHaltedError as exc:
-        return ExecutionConfirmResult(
-            client_order_id=client_order_id,
-            preview_id=normalized_preview_id,
-            trace_id=trace_id,
-            symbol=params["symbol"],
-            status="HALTED",
-            blocked_reason=str(exc),
-            audit_correlation_id=correlation_id,
-        )
-    except Exception as exc:
-        log_event(logger, logging.ERROR, "execution.confirm.failed",
-                  preview_id=normalized_preview_id, error=str(exc))
-        return ExecutionConfirmResult(
-            client_order_id=client_order_id,
-            preview_id=normalized_preview_id,
-            trace_id=trace_id,
-            symbol=params["symbol"],
-            status="REJECTED",
-            blocked_reason=f"Order placement failed: {exc}",
-            audit_correlation_id=correlation_id,
-        )
+    return ExecutionConfirmResult(
+        client_order_id="",
+        preview_id=normalized_preview_id,
+        symbol="",
+        status="REJECTED",
+        blocked_reason=(
+            "Internal preview/confirm execution is disabled. "
+            "Use the broker-managed order submission path instead."
+        ),
+        audit_correlation_id=correlation_id,
+    )
 
 
-def cancel_paper_order(order_id: int) -> dict:
+def cancel_paper_order(order_id: str) -> dict:
+    from backend.app.services.broker.registry import get_broker_provider
+
+    normalized_order_id = str(order_id or "").strip()
+    if not normalized_order_id:
+        raise LookupError("Broker order id is required.")
+    provider = get_broker_provider()
+    broker_status = provider.get_status()
+    if not bool(broker_status.get("connected")):
+        raise LookupError(broker_status.get("detail") or "Broker integration is unavailable.")
+    result = provider.cancel_order(normalized_order_id)
+    if not bool(result.get("ok")):
+        raise ValueError(result.get("error") or "Broker order cancellation failed.")
     with session_scope() as session:
         repo = ExecutionRepository(session)
-        row = repo.get_order_row(order_id)
-        if row is None:
-            raise LookupError(f"Paper order not found: {order_id}")
-        current_state = _paper_status_to_execution_state(row.status)
-        pending_cancel_state = transition_execution_status(current_state, ExecutionStatus.CANCEL_PENDING)
-        final_state = transition_execution_status(pending_cancel_state, ExecutionStatus.CANCELED)
-        canceled = repo.cancel_order(row, note="Canceled manually")
-        correlation_id = f"paper-cancel-{order_id}"
-        _record_order_event(
-            session,
-            order_intent_id=None,
-            client_order_id=canceled.client_order_id,
-            symbol=canceled.symbol,
-            event_type=EXECUTION_ORDER_CANCELED,
-            correlation_id=correlation_id,
-            payload={
-                "order_id": canceled.id,
-                "client_order_id": canceled.client_order_id,
-                "symbol": canceled.symbol,
-                "status": canceled.status,
-                "execution_state": final_state.value,
-                "state_path": [current_state.value, pending_cancel_state.value, final_state.value],
-                "cancellation": True,
-            },
+        repo.append_audit_event(
+            ExecutionEventRecord(
+                event_type="broker_order_canceled_via_compat_route",
+                symbol="",
+                strategy_mode="manual",
+                correlation_id=f"broker-cancel-{normalized_order_id}",
+                payload={
+                    "order_id": normalized_order_id,
+                    "broker_environment": "external_live" if not bool(broker_status.get("paper", True)) else "external_paper",
+                    "deprecated_internal_paper_route": True,
+                    "internal_paper_enabled": False,
+                },
+            )
         )
-        repo.append_audit_event(ExecutionEventRecord(
-            event_type="paper_order_canceled",
-            symbol=canceled.symbol,
-            strategy_mode=canceled.strategy_mode,
-            correlation_id=correlation_id,
-            payload={
-                **canceled.model_dump(mode="json"),
-                "execution_state": final_state.value,
-                "state_path": [current_state.value, pending_cancel_state.value, final_state.value],
-            },
-        ))
-    return canceled.model_dump(mode="json")
+    return {
+        "ok": True,
+        "id": normalized_order_id,
+        "status": "CANCELED",
+        "order_source": "broker",
+        "execution_source": "broker",
+        "broker_execution_mode": "broker_managed",
+        "broker_environment": "external_live" if not bool(broker_status.get("paper", True)) else "external_paper",
+        "deprecated_internal_paper_route": True,
+        "internal_paper_enabled": False,
+    }
 
 
 def get_paper_control_panel(*, broker_refresh: bool = False, limit: int = 50) -> dict:
@@ -2057,7 +2558,16 @@ def get_paper_control_panel(*, broker_refresh: bool = False, limit: int = 50) ->
     broker = get_broker_summary(refresh=broker_refresh)
 
     return {
-        "paper_mode_only": True,
+        "paper_mode_only": False,
+        "broker_managed_only": True,
+        "internal_paper_enabled": False,
+        "account_source": "broker",
+        "position_source": "broker",
+        "order_source": "broker",
+        "execution_source": "broker",
+        "broker_execution_mode": "broker_managed",
+        "broker_environment": _broker_environment_label(broker),
+        "detail": "Internal paper trading is disabled. This control panel is backed by the external broker account.",
         "broker": broker,
         "portfolio": portfolio,
         "open_orders": open_orders,

@@ -51,23 +51,30 @@ def can_current_process_run_scheduler() -> bool:
     return bool(SCHEDULER_ROLE_ALLOWED)
 
 
+def _scheduler_is_delegated() -> bool:
+    return bool(ENABLE_SCHEDULER and BackgroundScheduler is not None and not can_current_process_run_scheduler())
+
+
 def _scheduler_blocked_reason() -> str | None:
     if not ENABLE_SCHEDULER:
         return "Scheduler is disabled by configuration."
-    if not can_current_process_run_scheduler():
-        return (
-            f"Current server role '{SERVER_ROLE}' is not allowed to run the scheduler. "
-            f"Set MARKET_AI_SCHEDULER_RUNNER_ROLE={SERVER_ROLE} if this process should own it."
-        )
     if BackgroundScheduler is None:
         return "APScheduler is not installed."
+    if _scheduler_is_delegated():
+        return (
+            f"Scheduler ownership is delegated to role '{SCHEDULER_RUNNER_ROLE}'. "
+            f"Current role '{SERVER_ROLE}' is API/control-plane only."
+        )
     return None
 
 
 def _scheduler_runtime_state() -> str:
-    blocked_reason = _scheduler_blocked_reason()
-    if blocked_reason:
-        return "disabled" if not ENABLE_SCHEDULER else "blocked"
+    if not ENABLE_SCHEDULER:
+        return "disabled"
+    if BackgroundScheduler is None:
+        return "blocked"
+    if _scheduler_is_delegated():
+        return "delegated"
     if _scheduler is not None and _scheduler.running:
         return "running"
     return "idle"
@@ -294,11 +301,12 @@ def _sync_auto_trading_schedule_job():
 
 def start_scheduler():
     global _scheduler, _jobs_registered, _last_continuous_learning_start_result
+    delegated = _scheduler_is_delegated()
     blocked_reason = _scheduler_blocked_reason()
     if blocked_reason is not None:
         log_event(
             logger,
-            logging.INFO if not ENABLE_SCHEDULER else logging.WARNING,
+            logging.INFO if delegated or not ENABLE_SCHEDULER else logging.WARNING,
             "scheduler.start.blocked",
             role=SERVER_ROLE,
             runner_role=SCHEDULER_RUNNER_ROLE,
@@ -307,7 +315,8 @@ def start_scheduler():
         return {
             "enabled": ENABLE_SCHEDULER,
             "running": False,
-            "blocked": True,
+            "blocked": not delegated,
+            "delegated": delegated,
             "reason": blocked_reason,
             "runtime_state": _scheduler_runtime_state(),
         }
@@ -404,6 +413,8 @@ def get_scheduler_status():
             for row in recent
         ]
     blocked_reason = _scheduler_blocked_reason()
+    runtime_state = _scheduler_runtime_state()
+    delegated = runtime_state == "delegated"
     return {
         "scheduler_enabled": ENABLE_SCHEDULER,
         "scheduler_dependency_ready": BackgroundScheduler is not None,
@@ -413,8 +424,9 @@ def get_scheduler_status():
         "scheduler_role_allowed": can_current_process_run_scheduler(),
         "server_role": SERVER_ROLE,
         "focused_product_mode": FOCUSED_PRODUCT_MODE,
-        "runtime_state": _scheduler_runtime_state(),
-        "blocked": blocked_reason is not None,
+        "runtime_state": runtime_state,
+        "blocked": blocked_reason is not None and not delegated,
+        "delegated": delegated,
         "blocked_reason": blocked_reason,
         "jobs_registered": _jobs_registered,
         "jobs_count": len(jobs),

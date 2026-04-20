@@ -21,8 +21,8 @@ router = APIRouter(prefix="/paper", tags=["paper"])
 
 
 @router.get("/control-panel")
-def paper_control_panel():
-    return get_paper_control_panel()
+def paper_control_panel(refresh_broker: bool = Query(default=False)):
+    return get_paper_control_panel(broker_refresh=refresh_broker)
 
 
 @router.get("/portfolio")
@@ -68,7 +68,7 @@ def paper_order_create(payload: PaperOrderCreateRequest):
 
 
 @router.post("/orders/{order_id}/cancel")
-def paper_order_cancel(order_id: int):
+def paper_order_cancel(order_id: str):
     try:
         return cancel_paper_order(order_id)
     except Exception as exc:

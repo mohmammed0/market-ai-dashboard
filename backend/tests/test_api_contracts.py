@@ -176,6 +176,14 @@ class ApiContractsTests(unittest.TestCase):
         self.assertIn("dl_enabled", payload["product_scope"])
         self.assertIn("lightweight_experiment_mode", payload["product_scope"])
 
+    def test_metrics_otel_contract(self):
+        response = self.client.get("/api/metrics/otel")
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIn("otel", payload)
+        self.assertIn("enabled", payload["otel"])
+        self.assertIn("runtime", payload["otel"])
+
     def test_signal_surface_uses_experiment_dl_flag(self):
         fake_signal = {
             "symbol": "AAPL",

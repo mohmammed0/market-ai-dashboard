@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from backend.app.config import DEFAULT_SAMPLE_SYMBOLS
+from backend.app.config import AI_RESEARCH_LLM_TIMEOUT_SECONDS, DEFAULT_SAMPLE_SYMBOLS
 from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.events.publisher import publish_event
 from backend.app.models.market import NewsRecord
@@ -76,6 +76,68 @@ def _fetch_recent_news(symbol: str, limit: int = 5) -> list[dict[str, Any]]:
         return [serialize_news_record(row) for row in rows]
 
 
+def _normalize_sentiment(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"BULLISH", "POSITIVE", "BUY", "UP"}:
+        return "bullish"
+    if text in {"BEARISH", "NEGATIVE", "SELL", "DOWN"}:
+        return "bearish"
+    return "neutral"
+
+
+def _signal_sentiment_alignment(action: str, dominant_sentiment: str) -> str:
+    normalized_action = str(action or "").strip().lower()
+    if dominant_sentiment == "neutral":
+        return "mixed"
+    if normalized_action in {"buy", "add"}:
+        return "supportive" if dominant_sentiment == "bullish" else "contrarian"
+    if normalized_action in {"trim", "exit", "sell"}:
+        return "supportive" if dominant_sentiment == "bearish" else "contrarian"
+    return "mixed"
+
+
+def _build_sentiment_summary(news_evidence: list[dict[str, Any]], *, action: str) -> dict[str, Any]:
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    sentiment_priority = {"bearish": 0, "neutral": 1, "bullish": 2}
+    event_counts: dict[str, int] = {}
+    impact_values: list[float] = []
+    for row in news_evidence:
+        sentiment = _normalize_sentiment(row.get("sentiment"))
+        counts[sentiment] += 1
+        event_type = str(row.get("event_type") or "general").strip().lower() or "general"
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+        impact_values.append(_safe_float(row.get("impact_score")))
+
+    total = sum(counts.values())
+    dominant_sentiment = max(counts.items(), key=lambda item: (item[1], sentiment_priority.get(item[0], 0)))[0] if total else "neutral"
+    net_score = round((((counts["bullish"] - counts["bearish"]) / total) * 100.0), 2) if total else 0.0
+    avg_impact_score = round(sum(impact_values) / len(impact_values), 2) if impact_values else 0.0
+    top_event_types = [
+        item[0]
+        for item in sorted(event_counts.items(), key=lambda item: (-item[1], item[0]))
+    ][:3]
+    alignment = _signal_sentiment_alignment(action, dominant_sentiment)
+    if total:
+        note = (
+            f"News tone is {dominant_sentiment} with {counts['bullish']} bullish, "
+            f"{counts['bearish']} bearish, and {counts['neutral']} neutral items."
+        )
+    else:
+        note = "No recent news evidence was available for a sentiment overlay."
+    return {
+        "dominant_sentiment": dominant_sentiment,
+        "signal_alignment": alignment,
+        "bullish_count": counts["bullish"],
+        "bearish_count": counts["bearish"],
+        "neutral_count": counts["neutral"],
+        "news_item_count": total,
+        "net_sentiment_score": net_score,
+        "average_impact_score": avg_impact_score,
+        "top_event_types": top_event_types,
+        "note": note,
+    }
+
+
 def _map_risk_level(signal: str, confidence: float) -> str:
     normalized = str(signal or "HOLD").upper()
     if normalized in {"BUY", "ADD"} and confidence >= 75:
@@ -128,6 +190,7 @@ def _build_llm_summary(
     signal_payload: dict[str, Any] | None,
     knowledge_evidence: list[dict[str, Any]],
     news_evidence: list[dict[str, Any]],
+    timeout_seconds: float,
 ) -> dict[str, Any]:
     prompt_payload = {
         "symbol": symbol,
@@ -158,7 +221,12 @@ def _build_llm_summary(
             ),
         },
     ]
-    result = llm_chat(messages, temperature=0.1, max_tokens=420)
+    result = llm_chat(
+        messages,
+        temperature=0.1,
+        max_tokens=280,
+        timeout=timeout_seconds,
+    )
     parsed = _extract_json(result.get("content", ""))
     if not parsed:
         raise LLMUnavailableError("LLM response was not valid JSON.")
@@ -254,6 +322,7 @@ def build_symbol_research(
     confidence = max(0.0, min(confidence, 100.0))
     action = _normalize_action(signal, confidence)
     risk_level = _map_risk_level(signal, confidence)
+    sentiment_summary = _build_sentiment_summary(news_evidence, action=action)
     deterministic_summary = _build_deterministic_reason(
         symbol=normalized_symbol,
         signal=signal,
@@ -280,6 +349,7 @@ def build_symbol_research(
             signal_payload=signal_payload,
             knowledge_evidence=knowledge_evidence,
             news_evidence=top_news,
+            timeout_seconds=AI_RESEARCH_LLM_TIMEOUT_SECONDS,
         )
         llm_summary = llm_payload.get("summary") or None
         llm_key_points = llm_payload.get("key_points") or []
@@ -304,6 +374,12 @@ def build_symbol_research(
             event_type = str(news.get("event_type") or "general")
             sentiment = str(news.get("sentiment") or "NEUTRAL")
             key_points.append(f"News {event_type}: {sentiment}")
+    if sentiment_summary.get("news_item_count"):
+        key_points.append(
+            "Sentiment overlay: "
+            f"{sentiment_summary['dominant_sentiment']} / "
+            f"{sentiment_summary['signal_alignment']}"
+        )
     if knowledge_evidence:
         for evidence in knowledge_evidence[:2]:
             title = str(evidence.get("title") or "").strip()
@@ -366,6 +442,7 @@ def build_symbol_research(
             "knowledge_hits": len(knowledge_evidence),
             "news_hits": len(news_evidence),
         },
+        "sentiment_summary": sentiment_summary,
         "llm": {
             "provider": llm_provider,
             "model": llm_model,
@@ -391,6 +468,7 @@ def build_symbol_research(
                             "confidence": payload["confidence"],
                             "key_points": payload["key_points"],
                             "risk_notes": payload["risk_notes"],
+                            "sentiment_summary": payload["sentiment_summary"],
                         },
                         ensure_ascii=False,
                     ),
@@ -399,12 +477,15 @@ def build_symbol_research(
                         "confidence": payload["confidence"],
                         "risk_level": risk_level,
                         "llm_provider": llm_provider,
+                        "dominant_sentiment": sentiment_summary.get("dominant_sentiment"),
+                        "sentiment_score": sentiment_summary.get("net_sentiment_score"),
                         "importance_boost": 0.8 if payload["confidence"] >= 75 else 0.4,
                     },
                     "provenance": {
                         "research_id": research_id,
                         "retrieval": payload["retrieval"],
                         "evidence_count": len(evidence),
+                        "sentiment_summary": sentiment_summary,
                     },
                     "published_at": datetime.utcnow().isoformat(),
                 }

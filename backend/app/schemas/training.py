@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class TrainingJobStartRequest(BaseModel):
     model_type: str = Field(default="ml")
+    template_id: str | None = Field(default=None)
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY"])
     start_date: str = Field(default="2020-01-01")
     end_date: str = Field(default="2026-04-02")

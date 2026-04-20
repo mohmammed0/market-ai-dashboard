@@ -17,6 +17,7 @@ const BrokerPage = lazy(() => import("./pages/BrokerPage"));
 const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
 const RankingPage = lazy(() => import("./pages/RankingPage"));
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
+const AutoTradingDiagnosticsPage = lazy(() => import("./pages/AutoTradingDiagnosticsPage"));
 
 function PageSkeleton() {
   return (
@@ -98,6 +99,7 @@ export default function App() {
                           <Route path="/model-lab" element={<Navigate to="/settings" replace />} />
                           <Route path="/alerts-center" element={<Navigate to="/paper-trading" replace />} />
                           <Route path="/trade-journal" element={<Navigate to="/paper-trading" replace />} />
+                          <Route path="/diagnostics/auto-trading" element={<AutoTradingDiagnosticsPage />} />
                           <Route path="/automation" element={<Navigate to="/settings" replace />} />
                           <Route path="/operations" element={<Navigate to="/settings" replace />} />
                           <Route path="/portfolio-exposure" element={<Navigate to="/broker" replace />} />
@@ -106,7 +108,7 @@ export default function App() {
                           <Route path="/watchlist" element={<Navigate to="/ranking" replace />} />
                           <Route path="/ai-chat" element={<Navigate to="/ai-market" replace />} />
                           <Route path="/multi-chart" element={<Navigate to="/live-market" replace />} />
-                          <Route path="/brain" element={<Navigate to="/settings" replace />} />
+                          <Route path="/brain" element={<AutoTradingDiagnosticsPage />} />
                         </Routes>
                       </Suspense>
                     </ErrorBoundary>

@@ -295,6 +295,65 @@ class AlpacaBrokerProvider(BrokerProvider):
                 "count": 0,
             }
 
+
+    def get_market_session_status(self, refresh: bool = False) -> dict:
+        client, status = self._client()
+        if client is None:
+            return {
+                **status,
+                "source": "alpaca_clock_unavailable",
+                "market_open": False,
+                "is_trading_day": False,
+                "is_early_close": False,
+                "session_code": "fully_closed",
+                "extended_hours_available": False,
+                "after_hours_available": False,
+                "session_notes": ["broker_unavailable"],
+            }
+
+        config = get_alpaca_runtime_config()
+        cache_key = "broker:alpaca:clock"
+        try:
+            clock_payload = self._cached(cache_key, client.get_clock, refresh=refresh, ttl_seconds=30)
+            is_open = bool(getattr(clock_payload, "is_open", False))
+            ts = _coerce_text(getattr(clock_payload, "timestamp", None))
+            next_open = _coerce_text(getattr(clock_payload, "next_open", None))
+            next_close = _coerce_text(getattr(clock_payload, "next_close", None))
+            return {
+                **self._base_alpaca_status(
+                    config,
+                    connected=True,
+                    detail=f"Alpaca clock loaded ({self._mode(config)}).",
+                ),
+                "source": "alpaca_clock",
+                "market_open": is_open,
+                "is_trading_day": True,
+                "is_early_close": False,
+                "session_code": "regular_session" if is_open else "fully_closed",
+                "clock_timestamp": ts,
+                "next_open_at": next_open,
+                "next_close_at": next_close,
+                "extended_hours_available": True,
+                "after_hours_available": not is_open,
+                "session_notes": [],
+            }
+        except Exception as exc:  # pragma: no cover - external service
+            self._log_request_failure("clock", exc)
+            return {
+                **self._base_alpaca_status(
+                    config,
+                    detail=f"Alpaca clock request failed: {self._summarize_exception(exc)}",
+                ),
+                "source": "alpaca_clock_error",
+                "market_open": False,
+                "is_trading_day": False,
+                "is_early_close": False,
+                "session_code": "fully_closed",
+                "extended_hours_available": False,
+                "after_hours_available": False,
+                "session_notes": ["clock_fetch_failed"],
+            }
+
     def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
                      time_in_force: str = "day", limit_price: float | None = None,
                      estimated_price: float | None = None,

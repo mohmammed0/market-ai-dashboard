@@ -14,6 +14,7 @@ from backend.app.config import (
     BACKGROUND_JOB_MAX_ACTIVE_TOTAL,
     BACKGROUND_JOB_STALE_PENDING_SECONDS,
     ROOT_DIR,
+    SERVER_ROLE,
     TRAINING_RUNNER_PYTHON,
 )
 from backend.app.automation.service import (
@@ -174,17 +175,32 @@ def _spawn_background_job_process(job_id: str) -> int:
 
 def _reconcile_active_jobs(repo: BackgroundJobRepository) -> int:
     stale_before = datetime.utcnow() - timedelta(seconds=max(int(BACKGROUND_JOB_STALE_PENDING_SECONDS), 30))
+    can_reconcile_worker_pids = SERVER_ROLE in {"api", "all"}
     changed = 0
     for row in repo.list_active_job_rows():
         normalized_status = str(row.status or "").strip().lower()
-        if normalized_status == "running" and row.pid and not is_process_running(row.pid):
-            repo.mark_job_failed(
-                row.job_id,
-                error_message="Background worker process is no longer running.",
-                result_json=dumps_json({"error": "Background worker process is no longer running."}),
-                result_summary_json=dumps_json({"error": "Worker process terminated unexpectedly."}),
-            )
-            changed += 1
+        if normalized_status == "running":
+            # PID liveness checks must only run in the process namespace that launches
+            # background jobs (api role). Other roles (e.g. automation) run in a
+            # separate container namespace and would produce false negatives.
+            if can_reconcile_worker_pids and row.pid and not is_process_running(row.pid):
+                repo.mark_job_failed(
+                    row.job_id,
+                    error_message="Background worker process is no longer running.",
+                    result_json=dumps_json({"error": "Background worker process is no longer running."}),
+                    result_summary_json=dumps_json({"error": "Worker process terminated unexpectedly."}),
+                )
+                changed += 1
+            elif can_reconcile_worker_pids and not row.pid:
+                started_at = row.started_at or row.created_at
+                if started_at and started_at <= stale_before:
+                    repo.mark_job_failed(
+                        row.job_id,
+                        error_message="Background job is marked running without a worker pid (stale).",
+                        result_json=dumps_json({"error": "Background job is marked running without a worker pid (stale)."}),
+                        result_summary_json=dumps_json({"error": "Running job missing worker pid."}),
+                    )
+                    changed += 1
         elif normalized_status == "pending" and row.created_at and row.created_at <= stale_before:
             repo.mark_job_failed(
                 row.job_id,

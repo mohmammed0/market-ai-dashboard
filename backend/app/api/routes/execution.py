@@ -7,6 +7,7 @@ from backend.app.execution.service import (
     cancel_paper_order,
     get_alert_history,
     get_execution_audit,
+    get_execution_reconciliation,
     get_internal_portfolio,
     get_signal_history,
     get_trade_history,
@@ -48,6 +49,12 @@ class PaperOrderRequest(BaseModel):
     client_order_id: str | None = None
 
 
+class ExecutionReconcileRequest(BaseModel):
+    broker: str = "alpaca"
+    strategy_mode: str = "classic"
+    apply_sync: bool = False
+
+
 @router.get("/portfolio")
 def execution_portfolio():
     return build_execution_monitor_readmodel(limit=200)["portfolio"]
@@ -71,6 +78,27 @@ def execution_alerts(limit: int = Query(default=200, ge=1, le=500), severity: st
 @router.get("/audit")
 def execution_audit(limit: int = Query(default=200, ge=1, le=500), symbol: str | None = None):
     return get_execution_audit(limit=limit, symbol=symbol)
+
+
+@router.get("/reconcile")
+def execution_reconcile(
+    broker: str = Query(default="alpaca"),
+    strategy_mode: str = Query(default="classic"),
+):
+    return get_execution_reconciliation(
+        broker=broker,
+        strategy_mode=strategy_mode,
+        apply_sync=False,
+    )
+
+
+@router.post("/reconcile")
+def execution_reconcile_apply(payload: ExecutionReconcileRequest):
+    return get_execution_reconciliation(
+        broker=payload.broker,
+        strategy_mode=payload.strategy_mode,
+        apply_sync=payload.apply_sync,
+    )
 
 
 @router.post("/refresh")
@@ -109,7 +137,7 @@ def execution_halt_clear():
 
 
 # ---------------------------------------------------------------------------
-# Paper orders — direct create / list / cancel
+# Broker-managed order compatibility surfaces
 # ---------------------------------------------------------------------------
 
 @router.get("/orders")
@@ -140,7 +168,7 @@ def execution_create_order(payload: PaperOrderRequest):
 
 
 @router.delete("/orders/{order_id}")
-def execution_cancel_order(order_id: int):
+def execution_cancel_order(order_id: str):
     try:
         return cancel_paper_order(order_id)
     except LookupError as exc:

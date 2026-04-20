@@ -66,6 +66,7 @@ def _build_health_context() -> dict:
         "orchestration": control_plane.get("orchestration"),
         "broker_runtime": control_plane.get("broker_runtime"),
         "cache": control_plane.get("cache"),
+        "observability": control_plane.get("observability"),
         "orchestration_topology": control_plane.get("orchestration_topology"),
         "environment_bootstrap": control_plane.get("environment_bootstrap"),
     }
@@ -130,6 +131,7 @@ def readiness_check():
         "orchestration": control_plane.get("orchestration"),
         "broker_runtime": control_plane.get("broker_runtime"),
         "cache": control_plane.get("cache"),
+        "observability": control_plane.get("observability"),
         "orchestration_topology": control_plane.get("orchestration_topology"),
         "environment_bootstrap": control_plane.get("environment_bootstrap"),
         "storage": control_plane.get("storage"),

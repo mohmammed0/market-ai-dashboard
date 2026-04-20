@@ -124,6 +124,7 @@ const exactTranslations = {
   "Loading": "جارٍ التحميل",
   "Running": "قيد التشغيل",
   "running": "قيد التشغيل",
+  "delegated": "مُدار عبر خدمة أخرى",
   "Refreshing": "جارٍ التحديث",
   "Connected": "متصل",
   "connected": "متصل",
@@ -137,6 +138,7 @@ const exactTranslations = {
   "Inactive": "غير نشط",
   "standby": "استعداد",
   "Standby": "استعداد",
+  "Delegated": "مُدار عبر خدمة أخرى",
   "warning": "تحذير",
   "Warning": "تحذير",
   "critical": "حرج",
@@ -198,7 +200,12 @@ const exactTranslations = {
   "BUY": "شراء",
   "SELL": "بيع",
   "HOLD": "احتفاظ",
+  "WAIT": "انتظار",
+  "WATCH": "مراقبة",
+  "LONG": "شراء",
+  "SHORT": "بيع",
   "UNKNOWN": "غير معروف",
+  "unknown": "غير معروف",
   "BULLISH": "إيجابي",
   "BEARISH": "سلبي",
   "Neutral": "محايد",
@@ -619,6 +626,8 @@ const exactTranslations = {
   "Selected market symbol preview.": "معاينة الرمز السوقي المحدد.",
   "Session": "الجلسة",
   "Profile": "الملف",
+  "guest": "زائر",
+  "operator": "مشغّل",
   "Quote": "السعر",
   "History": "التاريخ",
   "History Rows": "صفوف التاريخ",
@@ -704,6 +713,8 @@ const exactTranslations = {
   "Live Execution": "تنفيذ حي",
   "manual": "يدوي",
   "market": "سوقي",
+  "fallback": "احتياطي",
+  "snapshot": "لقطة",
   "Max Daily Loss": "أقصى خسارة يومية",
   "Max Risk / Trade": "أقصى مخاطرة / صفقة",
   "missing": "مفقود",
@@ -837,6 +848,10 @@ function translatePattern(value) {
 
   if (/^\d+\s+indices$/i.test(value)) {
     return value.replace(/^(\d+)\s+indices$/i, "$1 مؤشر");
+  }
+
+  if (/^\d+\s+ticks$/i.test(value)) {
+    return value.replace(/^(\d+)\s+ticks$/i, "$1 تحديث");
   }
 
   if (/^Rank #/i.test(value)) {

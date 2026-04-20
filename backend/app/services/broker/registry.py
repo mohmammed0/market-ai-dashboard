@@ -9,7 +9,7 @@ def get_broker_provider():
     provider = get_broker_runtime_config()["provider"]
     if provider == "alpaca":
         return AlpacaBrokerProvider()
-    return DisabledBrokerProvider(detail="No broker provider is configured. Internal paper trading remains available.")
+    return DisabledBrokerProvider(detail="No broker provider is configured. Internal paper simulation is disabled.")
 
 
 def get_broker_status() -> dict:
@@ -34,3 +34,7 @@ def get_broker_summary(refresh: bool = False) -> dict:
 
 def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
     return get_broker_provider().liquidate_positions(cancel_open_orders=cancel_open_orders)
+
+
+def get_market_session_status(refresh: bool = False) -> dict:
+    return get_broker_provider().get_market_session_status(refresh=refresh)

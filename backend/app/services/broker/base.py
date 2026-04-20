@@ -29,17 +29,32 @@ class BrokerProvider:
 
     def _base_status(self, **overrides) -> dict:
         guardrails = get_broker_guardrails()
+        effective_mode = str(overrides.get("mode", self.mode) or "").strip().lower()
+        environment = overrides.get("broker_environment")
+        if not str(environment or "").strip():
+            environment = "external_paper"
+        if effective_mode == "live":
+            environment = "external_live"
+        elif effective_mode == "disabled":
+            environment = "disabled"
         payload = {
             "provider": self.provider_name,
             "enabled": False,
             "configured": False,
             "sdk_installed": False,
             "connected": False,
-            "mode": self.mode,
+            "mode": effective_mode or self.mode,
             "trading_mode": guardrails["trading_mode"],
             "paper": True,
             "live_execution_enabled": guardrails["live_execution_enabled"],
             "order_submission_enabled": guardrails["order_submission_enabled"],
+            "broker_execution_mode": "broker_managed",
+            "broker_environment": environment,
+            "internal_paper_enabled": False,
+            "account_source": "broker",
+            "position_source": "broker",
+            "order_source": "broker",
+            "execution_source": "broker",
             "detail": "Broker integration is disabled.",
         }
         payload.update(overrides)
@@ -58,6 +73,19 @@ class BrokerProvider:
     def get_orders(self, refresh: bool = False) -> dict:
         status = self.get_status()
         return {**status, "items": [], "count": 0}
+
+    def get_market_session_status(self, refresh: bool = False) -> dict:
+        return {
+            **self.get_status(),
+            "source": "disabled_broker",
+            "market_open": False,
+            "is_trading_day": False,
+            "is_early_close": False,
+            "session_code": "fully_closed",
+            "extended_hours_available": False,
+            "after_hours_available": False,
+            "session_notes": ["broker_disabled"],
+        }
 
     def submit_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
                      time_in_force: str = "day", limit_price: float | None = None,

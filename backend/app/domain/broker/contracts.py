@@ -16,6 +16,13 @@ class BrokerStatus(BaseModel):
     paper: bool = True
     live_execution_enabled: bool = False
     order_submission_enabled: bool = False
+    broker_execution_mode: str = "broker_managed"
+    broker_environment: str = "external_paper"
+    internal_paper_enabled: bool = False
+    account_source: str = "broker"
+    position_source: str = "broker"
+    order_source: str = "broker"
+    execution_source: str = "broker"
     detail: str = ""
 
 

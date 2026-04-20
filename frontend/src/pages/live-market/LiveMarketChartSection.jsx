@@ -41,6 +41,7 @@ function LiveMarketChartSection({
     { label: "القيمة السوقية", value: formatCompact(selectedSnapshot?.quote?.market_cap), badge: "حجم الشركة" },
     { label: "الموقف", value: decision?.stance || selectedSnapshot?.signal || "-", badge: "قرار", tone: decision?.stance === "BUY" ? "accent" : decision?.stance === "SELL" ? "negative" : "warning" },
     { label: "الثقة", value: decision?.confidence ?? "-", badge: "%" },
+    { label: "التدفق الحي", value: chartPayload?.live_stream?.connected ? "متصل" : (chartPayload?.live_stream?.provider_status || "fallback"), badge: `${chartPayload?.latest_live_items?.length ?? 0} ticks`, tone: chartPayload?.live_stream?.connected ? "accent" : "warning" },
   ];
 
   return (
@@ -59,6 +60,7 @@ function LiveMarketChartSection({
       action={
         <div className="terminal-toolbar-actions">
           <StatusBadge label={chartPayload?.mode === "line" ? "تدفق لحظي" : "OHLCV"} tone={chartPayload?.mode === "line" ? "accent" : "subtle"} />
+          <StatusBadge label={chartPayload?.live_stream?.provider_status || "snapshot"} tone={chartPayload?.live_stream?.connected ? "accent" : "warning"} />
           <button className={`secondary-button${liveEnabled ? " active" : ""}`} type="button" onClick={onToggleLiveEnabled}>
             {liveEnabled ? "إيقاف الحي" : "تفعيل الحي"}
           </button>

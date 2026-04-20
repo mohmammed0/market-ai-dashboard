@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import json
 import logging
+from pathlib import Path
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -45,6 +46,18 @@ try:
     import yfinance as yf
 except Exception:  # pragma: no cover - optional dependency
     yf = None
+else:  # pragma: no cover - startup hardening for containerized envs
+    try:
+        cache_root = Path("/tmp/yfinance-cache")
+        cache_root.mkdir(parents=True, exist_ok=True)
+        if hasattr(yf, "cache") and hasattr(yf.cache, "set_cache_location"):
+            yf.cache.set_cache_location(str(cache_root))
+        tz_cache_dir = cache_root / "tz"
+        tz_cache_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(yf, "set_tz_cache_location"):
+            yf.set_tz_cache_location(str(tz_cache_dir))
+    except Exception:
+        pass
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +83,11 @@ class ProviderSnapshotResult:
 
 def normalize_symbol(symbol: str) -> str:
     normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return ""
+    # Accept user-typed forms like "$QQQ" without leaking the prefix to providers.
+    while normalized.startswith("$"):
+        normalized = normalized[1:].strip()
     if not normalized:
         return ""
     if normalized.endswith("^") and not normalized.startswith("^"):

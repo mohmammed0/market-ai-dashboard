@@ -7,7 +7,9 @@ import MetricCard from "../components/ui/MetricCard";
 import PageFrame from "../components/ui/PageFrame";
 import SectionCard from "../components/ui/SectionCard";
 import StatusBadge from "../components/ui/StatusBadge";
+import SummaryStrip from "../components/ui/SummaryStrip";
 import {
+  getKnowledgeDocument,
   ingestKnowledge,
   listRecentKnowledge,
   runAiResearch,
@@ -36,6 +38,22 @@ function compactScore(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "—";
   return num.toFixed(2);
+}
+
+function mergeDocumentIntoPayload(currentPayload, document) {
+  if (!document?.document_id) {
+    return currentPayload;
+  }
+  const currentItems = Array.isArray(currentPayload?.items) ? currentPayload.items : [];
+  const nextItems = [
+    document,
+    ...currentItems.filter((item) => item?.document_id !== document.document_id),
+  ];
+  return {
+    ...(currentPayload || {}),
+    items: nextItems,
+    count: nextItems.length,
+  };
 }
 
 function KnowledgeList({ items, loading, selectedId, onSelect }) {
@@ -197,6 +215,16 @@ export default function KnowledgePage() {
         persist: true,
       });
       setResearchResult(result);
+      const persistedId = String(result?.persisted_document_id || "").trim();
+      if (persistedId) {
+        try {
+          const persistedDocument = await getKnowledgeDocument(persistedId);
+          setPayload((current) => mergeDocumentIntoPayload(current, persistedDocument));
+          setSelected(persistedDocument);
+        } catch {
+          await loadRecent();
+        }
+      }
     } catch (requestError) {
       setResearchError(requestError.message || "تعذر تنفيذ التحليل السياقي.");
     } finally {
@@ -368,6 +396,18 @@ export default function KnowledgePage() {
                 <strong>Key points</strong>
                 <p>{Array.isArray(researchResult.key_points) ? researchResult.key_points.join(" • ") : "—"}</p>
               </div>
+              {researchResult.sentiment_summary ? (
+                <SummaryStrip
+                  compact
+                  items={[
+                    { label: "Sentiment", value: researchResult.sentiment_summary.dominant_sentiment || "neutral", badge: researchResult.sentiment_summary.signal_alignment || "mixed" },
+                    { label: "Bullish", value: researchResult.sentiment_summary.bullish_count ?? 0 },
+                    { label: "Bearish", value: researchResult.sentiment_summary.bearish_count ?? 0 },
+                    { label: "Neutral", value: researchResult.sentiment_summary.neutral_count ?? 0 },
+                    { label: "Net Score", value: researchResult.sentiment_summary.net_sentiment_score ?? 0, tone: Number(researchResult.sentiment_summary.net_sentiment_score || 0) >= 0 ? "positive" : "negative" },
+                  ]}
+                />
+              ) : null}
               <div className="dashboard-source-card">
                 <strong>Evidence</strong>
                 <p>{Array.isArray(researchResult.evidence) ? `${researchResult.evidence.length} items` : "0"}</p>

@@ -6,6 +6,7 @@ from backend.app.market_data.service import (
     incremental_update_and_publish,
     load_and_publish_history,
 )
+from backend.app.services.live_stream import get_live_stream_snapshot
 
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
@@ -35,4 +36,15 @@ def update_history(payload: QuoteRequest):
 
 @router.post("/live-snapshot")
 def live_snapshot(payload: QuoteRequest):
-    return fetch_and_publish_quote_snapshots(payload.symbols)
+    stream_payload = get_live_stream_snapshot(payload.symbols, poll_interval=3)
+    snapshot_payload = fetch_and_publish_quote_snapshots(payload.symbols)
+    if stream_payload.get("items"):
+        return {
+            **snapshot_payload,
+            "live_items": stream_payload.get("items"),
+            "live_stream": stream_payload.get("stream"),
+        }
+    return {
+        **snapshot_payload,
+        "live_stream": stream_payload.get("stream"),
+    }

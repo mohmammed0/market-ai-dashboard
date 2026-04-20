@@ -28,7 +28,7 @@ function MetricCard({
     >
       <div className="metric-card-top">
         <span className="metric-card-label">{translateNode(label)}</span>
-        {badge && <span className="chip">{badge}</span>}
+        {badge && <span className="metric-chip">{translateNode(badge)}</span>}
       </div>
       <span className="metric-card-value">{translateNode(value ?? "-")}</span>
       {(detail || delta) && (

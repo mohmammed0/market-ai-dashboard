@@ -18,11 +18,13 @@ from backend.app.application.execution.service import (
     preview_paper_order,
     refresh_signals,
 )
+from backend.app.domain.execution.services.reconciliation_service import get_execution_reconciliation
 
 __all__ = [
     "cancel_paper_order",
     "confirm_paper_order",
     "create_paper_order",
+    "get_execution_reconciliation",
     "get_alert_history",
     "get_execution_audit",
     "get_internal_portfolio",
