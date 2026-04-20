@@ -100,3 +100,9 @@ frontend/test-results/
 frontend/playwright-report/
 .vite/
 *.docx
+
+.backup/
+
+.codex_backups/
+
+*.bak.*
