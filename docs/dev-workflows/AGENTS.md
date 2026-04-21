@@ -1,7 +1,5 @@
 # AGENTS.md
 
-Canonical copy: `docs/dev-workflows/AGENTS.md`
-
 ## Project Purpose
 - Build and maintain a production-minded Market AI platform while preserving the existing working logic for analysis, technical scoring, ranking, optimizer results, backtesting, and the current PySide desktop app.
 - Treat the root Python engines as the source of truth and extend the platform through `core/`, `backend/`, and `frontend/` with focused modular patches.
