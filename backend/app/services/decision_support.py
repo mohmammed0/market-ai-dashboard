@@ -22,6 +22,8 @@ from backend.app.services.confidence_calibration import (
 from backend.app.services.continuous_learning import list_generated_strategy_candidates
 from backend.app.services.events_calendar import fetch_market_events
 from backend.app.services.explainability import build_signal_explanation
+from backend.app.services.portfolio_brain.decision_policy import resolve_action as _resolve_policy_action
+from backend.app.services.portfolio_brain.explanation_payload import build_chart_plan as _build_brain_chart_plan
 from backend.app.services.strategy_lab import list_strategy_evaluations
 from core.source_data import normalize_symbol
 
@@ -89,163 +91,11 @@ def _sentiment_tone(value: Any) -> str:
 
 
 def _resolve_action(signal: str, confidence: float, analysis: dict) -> str:
-    normalized_signal = str(signal or "HOLD").upper().strip()
-    technical_score = _safe_float(analysis.get("technical_score"), 0.0) or 0.0
-    ensemble_output = analysis.get("ensemble_output") or {}
-    ensemble_score = abs(_safe_float(ensemble_output.get("ensemble_score"), 0.0) or 0.0)
-    news_items = analysis.get("news_items") or []
-    news_tone = str((news_items[0] if news_items else {}).get("sentiment") or "").upper()
-    ml_output = analysis.get("ml_output") or {}
-    ml_buy = _safe_float(ml_output.get("prob_buy"), 0.0) or 0.0
-    ml_sell = _safe_float(ml_output.get("prob_sell"), 0.0) or 0.0
-
-    if normalized_signal == "BUY":
-        if (
-            confidence >= DECISION_ACTION_BUY_CONFIDENCE
-            and technical_score >= 1
-            and (ml_buy >= ml_sell or news_tone != "NEGATIVE")
-        ):
-            return "BUY"
-        if (
-            confidence >= DECISION_ACTION_ADD_CONFIDENCE
-            and (technical_score >= -0.5 or ensemble_score >= 0.2)
-        ):
-            return "ADD"
-        return "WATCH"
-    if normalized_signal == "SELL":
-        if confidence >= DECISION_ACTION_EXIT_CONFIDENCE or (technical_score <= -3 and news_tone == "NEGATIVE"):
-            return "EXIT"
-        if confidence >= DECISION_ACTION_TRIM_CONFIDENCE or ml_sell > ml_buy + 0.10:
-            return "TRIM"
-        return "WATCH"
-    if technical_score <= -2 and (news_tone == "NEGATIVE" or ml_sell > ml_buy + 0.15):
-        return "TRIM"
-    if confidence >= DECISION_ACTION_HOLD_CONFIDENCE:
-        return "HOLD"
-    return "WATCH"
+    return _resolve_policy_action(signal, confidence, analysis)
 
 
 def _build_chart_plan(analysis: dict, explanation: dict, events: list[dict]) -> dict:
-    signal = str(analysis.get("enhanced_signal") or analysis.get("signal") or "HOLD").upper()
-    close = _safe_float(analysis.get("close"))
-    atr = abs(_safe_float(analysis.get("atr14"), 0.0) or 0.0)
-    support = _safe_float(analysis.get("support"))
-    resistance = _safe_float(analysis.get("resistance"))
-    atr_stop = _safe_float(analysis.get("atr_stop"))
-    atr_target = _safe_float(analysis.get("atr_target"))
-    analysis_date = _coerce_date(analysis.get("date"))
-    zones: list[dict] = []
-    levels: list[dict] = []
-    markers: list[dict] = []
-
-    if close is not None:
-        if signal == "BUY":
-            entry = _normalize_band(
-                support if support is not None else close - (atr * 0.4),
-                close,
-            )
-            target = _normalize_band(
-                close + (atr * 0.35),
-                resistance if resistance is not None else atr_target if atr_target is not None else close + (atr * 1.2),
-            )
-        elif signal == "SELL":
-            entry = _normalize_band(
-                close,
-                resistance if resistance is not None else close + (atr * 0.4),
-            )
-            target = _normalize_band(
-                support if support is not None else close - (atr * 1.2),
-                close - (atr * 0.35),
-            )
-        else:
-            entry = _normalize_band(close - (atr * 0.25), close + (atr * 0.25))
-            target = _normalize_band(
-                support if support is not None else close - (atr * 0.5),
-                resistance if resistance is not None else close + (atr * 0.5),
-            )
-
-        if entry is not None:
-            zones.append(
-                {
-                    "kind": "entry_zone",
-                    "label": "منطقة الدخول",
-                    "tone": "accent" if signal == "BUY" else "warning" if signal == "SELL" else "subtle",
-                    "low": entry[0],
-                    "high": entry[1],
-                    "source": "derived_from_close_support_resistance_atr",
-                }
-            )
-        if target is not None:
-            zones.append(
-                {
-                    "kind": "target_zone",
-                    "label": "منطقة الهدف",
-                    "tone": "positive",
-                    "low": target[0],
-                    "high": target[1],
-                    "source": "derived_from_resistance_support_atr_target",
-                }
-            )
-
-        markers.append(
-            {
-                "kind": "signal_marker",
-                "label": signal,
-                "tone": _sentiment_tone(signal),
-                "date": analysis_date,
-                "value": round(close, 4),
-                "detail": explanation.get("summary") or analysis.get("reasons"),
-            }
-        )
-
-    for kind, label, value, tone in (
-        ("support", "الدعم", support, "subtle"),
-        ("resistance", "المقاومة", resistance, "warning"),
-        ("invalidation", "الإبطال / الوقف", atr_stop, "negative"),
-        ("target", "هدف ATR", atr_target, "positive"),
-    ):
-        if value is not None:
-            levels.append(
-                {
-                    "kind": kind,
-                    "label": label,
-                    "value": round(value, 4),
-                    "tone": tone,
-                }
-            )
-
-    for row in (analysis.get("news_items") or [])[:3]:
-        published_at = _coerce_date(row.get("published"))
-        markers.append(
-            {
-                "kind": "news_marker",
-                "label": row.get("source") or "خبر",
-                "tone": _sentiment_tone(row.get("sentiment")),
-                "date": published_at,
-                "value": round(close, 4) if close is not None else None,
-                "detail": row.get("title"),
-            }
-        )
-
-    for row in events[:2]:
-        event_date = _coerce_date(row.get("event_at"))
-        markers.append(
-            {
-                "kind": "event_marker",
-                "label": row.get("event_type") or row.get("title") or "حدث",
-                "tone": "subtle",
-                "date": event_date,
-                "value": round(close, 4) if close is not None else None,
-                "detail": row.get("summary") or row.get("description") or row.get("event_type"),
-            }
-        )
-
-    return {
-        "note": "المناطق والمستويات مشتقة من الدعم والمقاومة وATR والإشارة الحالية، وليست توصية مستقلة جديدة.",
-        "zones": zones,
-        "levels": levels,
-        "markers": markers[:6],
-    }
+    return _build_brain_chart_plan(analysis, explanation, events)
 
 
 def _build_strategy_hooks(symbol: str) -> dict:
