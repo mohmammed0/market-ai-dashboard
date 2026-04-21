@@ -101,7 +101,7 @@ test("Live market page loads current terminal shell", async ({ page }) => {
   await expect(page.getByText("سير عمل السوق").first()).toBeVisible();
 });
 
-test("Portfolio snapshot contract is available and paper trading page renders", async ({ page, request }) => {
+test("Portfolio snapshot contract is available and execution route renders", async ({ page, request }) => {
   const authSession = await resolveAuthSession(request);
   const response = await page.request.get(`${API_BASE_URL}/api/portfolio/snapshot`, { headers: authSession.headers });
   expect(response.ok()).toBeTruthy();
@@ -110,9 +110,32 @@ test("Portfolio snapshot contract is available and paper trading page renders", 
   expect(typeof payload.source_label).toBe("string");
   expect(payload.summary).toBeTruthy();
 
-  await page.goto("/paper-trading");
+  await page.goto("/execution");
   await expect(page.getByText("التداول الورقي").first()).toBeVisible();
   await expect(page.getByText("المراكز المفتوحة").first()).toBeVisible();
+});
+
+test("Paper trading alias redirects to canonical execution route", async ({ page }) => {
+  await page.goto("/paper-trading");
+  await expect(page).toHaveURL(/\/execution/);
+  await expect(page.getByText("التداول الورقي").first()).toBeVisible();
+});
+
+test("Main operator pages resolve", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("لوحة القيادة").first()).toBeVisible();
+
+  await page.goto("/ranking");
+  await expect(page.getByText("ترتيب الأسهم").first()).toBeVisible();
+
+  await page.goto("/live-market");
+  await expect(page.getByText("طرفية السوق").first()).toBeVisible();
+
+  await page.goto("/broker");
+  await expect(page.getByText("الوسيط").first()).toBeVisible();
+
+  await page.goto("/settings");
+  await expect(page.getByText("الإعدادات").first()).toBeVisible();
 });
 
 test("AI status contract is reflected in the top bar", async ({ page, request }) => {

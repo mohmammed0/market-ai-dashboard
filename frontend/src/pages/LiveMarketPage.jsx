@@ -295,7 +295,7 @@ export default function LiveMarketPage() {
   const headerActions = useMemo(
     () => (
       <>
-        <ActionButton to={`/paper-trading?symbol=${encodeURIComponent(selectedSymbol)}`} variant="secondary">تنفيذ ورقي</ActionButton>
+        <ActionButton to={`/execution?symbol=${encodeURIComponent(selectedSymbol)}`} variant="secondary">تنفيذ ورقي</ActionButton>
         <StatusBadge label={session?.label || "السوق"} tone={sessionTone(session?.label)} />
       </>
     ),

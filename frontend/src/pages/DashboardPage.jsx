@@ -161,7 +161,7 @@ function OpportunityRow({ item, onNavigate }) {
   const riskLabel = item?.risk_label || "RANGE";
   const reason = item?.reason || item?.best_setup || item?.setup_type || item?.notes || "فرصة مرتبة من محرك القرار.";
   return (
-    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/execution?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
       <div className="dashboard-list-copy">
         <strong>{item?.symbol || "—"}</strong>
         <p>{reason}</p>
@@ -177,7 +177,7 @@ function OpportunityRow({ item, onNavigate }) {
 function PositionRow({ item, onNavigate }) {
   const pnl = Number(item?.unrealized_pnl ?? 0);
   return (
-    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/execution?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
       <div className="dashboard-list-copy">
         <strong>{item?.symbol || "—"}</strong>
         <p>{`${item?.side || "LONG"} · ${item?.quantity || 0} أسهم`}</p>
@@ -445,7 +445,7 @@ export default function DashboardPage() {
               <div className="dashboard-subsection">
                 <div className="dashboard-subsection-head">
                   <strong>المراكز الحالية</strong>
-                  <button className="secondary-button" type="button" onClick={() => navigate("/paper-trading")}>
+                  <button className="secondary-button" type="button" onClick={() => navigate("/execution")}>
                     افتح التداول الورقي
                   </button>
                 </div>

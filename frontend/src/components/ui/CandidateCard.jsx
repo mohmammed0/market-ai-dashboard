@@ -29,7 +29,7 @@ export default function CandidateCard({ item }) {
           {isPinnedSymbol(symbol) ? "إلغاء التثبيت" : "تثبيت"}
         </button>
         <Link className="inline-link inline-link-chip" to={`/analyze?symbol=${encodeURIComponent(symbol)}`}>تحليل</Link>
-        <Link className="inline-link inline-link-chip" to={`/paper-trading?symbol=${encodeURIComponent(symbol)}`}>ورقي</Link>
+        <Link className="inline-link inline-link-chip" to={`/execution?symbol=${encodeURIComponent(symbol)}`}>ورقي</Link>
       </div>
     </article>
   );

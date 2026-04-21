@@ -5,6 +5,7 @@ import ErrorBoundary from "./components/ui/ErrorBoundary";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppDataProvider } from "./store/AppDataStore";
 import AppLayout from "./components/layout/AppLayout";
+import { CANONICAL_APP_ROUTES, LEGACY_ROUTE_ALIASES } from "./routes/routeAliases";
 
 // Lazy load pages
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -79,34 +80,18 @@ export default function App() {
                     <ErrorBoundary>
                       <Suspense fallback={<PageSkeleton />}>
                         <Routes>
-                          <Route path="/" element={<DashboardPage />} />
-                          <Route path="/ai-news" element={<AINewsPage />} />
-                          <Route path="/live-market" element={<LiveMarketPage />} />
-                          <Route path="/paper-trading" element={<PaperTradingPage />} />
-                          <Route path="/settings" element={<SettingsPage />} />
-                          <Route path="/analyze" element={<Navigate to="/ai-market" replace />} />
-                          <Route path="/ranking" element={<RankingPage />} />
-                          <Route path="/knowledge" element={<KnowledgePage />} />
-                          <Route path="/broker" element={<BrokerPage />} />
-                          <Route path="/scan" element={<Navigate to="/ranking?mode=scan" replace />} />
-                          <Route path="/ai-market" element={<AIMarketPage />} />
-                          <Route path="/kpis" element={<Navigate to="/" replace />} />
-                          <Route path="/breadth" element={<Navigate to="/ranking" replace />} />
-                          <Route path="/risk" element={<Navigate to="/broker" replace />} />
-                          <Route path="/backtest" element={<Navigate to="/ranking" replace />} />
-                          <Route path="/strategy-lab" element={<Navigate to="/ranking" replace />} />
-                          <Route path="/model-lab" element={<Navigate to="/settings" replace />} />
-                          <Route path="/alerts-center" element={<Navigate to="/paper-trading" replace />} />
-                          <Route path="/trade-journal" element={<Navigate to="/paper-trading" replace />} />
-                          <Route path="/automation" element={<Navigate to="/settings" replace />} />
-                          <Route path="/operations" element={<Navigate to="/settings" replace />} />
-                          <Route path="/portfolio-exposure" element={<Navigate to="/broker" replace />} />
-                          <Route path="/macro" element={<Navigate to="/ai-market" replace />} />
-                          <Route path="/fundamentals" element={<Navigate to="/ai-market" replace />} />
-                          <Route path="/watchlist" element={<Navigate to="/ranking" replace />} />
-                          <Route path="/ai-chat" element={<Navigate to="/ai-market" replace />} />
-                          <Route path="/multi-chart" element={<Navigate to="/live-market" replace />} />
-                          <Route path="/brain" element={<Navigate to="/settings" replace />} />
+                          <Route path={CANONICAL_APP_ROUTES.dashboard} element={<DashboardPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.aiNews} element={<AINewsPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.liveMarket} element={<LiveMarketPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.execution} element={<PaperTradingPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.settings} element={<SettingsPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.ranking} element={<RankingPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.knowledge} element={<KnowledgePage />} />
+                          <Route path={CANONICAL_APP_ROUTES.broker} element={<BrokerPage />} />
+                          <Route path={CANONICAL_APP_ROUTES.aiMarket} element={<AIMarketPage />} />
+                          {LEGACY_ROUTE_ALIASES.map((alias) => (
+                            <Route key={alias.from} path={alias.from} element={<Navigate to={alias.to} replace />} />
+                          ))}
                         </Routes>
                       </Suspense>
                     </ErrorBoundary>

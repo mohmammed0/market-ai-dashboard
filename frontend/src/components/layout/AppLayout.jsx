@@ -44,7 +44,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    path: "/paper-trading",
+    path: "/execution",
     label: "التداول الورقي",
     section: "الرئيسية",
     hint: "المحفظة، الأوامر، والصفقات",
@@ -334,7 +334,7 @@ const NAV_ITEMS = [
 ];
 
 const NAV_SECTIONS = [
-  { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/paper-trading", "/ai-news"] },
+  { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/execution", "/paper-trading", "/ai-news"] },
   { label: "التحليل", paths: ["/ranking", "/knowledge"] },
   { label: "التنفيذ", paths: ["/broker"] },
   { label: "المنصة", paths: ["/settings"] },

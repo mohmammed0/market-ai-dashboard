@@ -72,7 +72,7 @@ function LiveMarketExplorerTable({
               <Link className="inline-link inline-link-chip" to={`/analyze?symbol=${encodeURIComponent(symbol)}`}>
                 تحليل
               </Link>
-              <Link className="inline-link inline-link-chip" to={`/paper-trading?symbol=${encodeURIComponent(symbol)}`}>
+              <Link className="inline-link inline-link-chip" to={`/execution?symbol=${encodeURIComponent(symbol)}`}>
                 ورقي
               </Link>
             </div>
