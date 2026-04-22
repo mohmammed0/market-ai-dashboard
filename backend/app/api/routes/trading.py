@@ -8,7 +8,6 @@ from backend.app.application.execution.service import (
     create_paper_order as create_trading_order,
     get_alert_history,
     get_paper_control_panel as get_trading_control_panel,
-    get_internal_portfolio,
     get_signal_history,
     get_trade_history,
     list_paper_orders as list_trading_orders,

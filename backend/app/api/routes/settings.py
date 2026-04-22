@@ -110,6 +110,24 @@ def test_alpaca_settings():
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/runtime/alpaca/test-paper")
+def test_alpaca_settings_paper():
+    try:
+        result = test_alpaca_runtime_settings(paper_override=True)
+        result["requested_mode"] = "paper"
+        return result
+    except RuntimeSettingsError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/runtime/alpaca/test-live")
+def test_alpaca_settings_live():
+    try:
+        result = test_alpaca_runtime_settings(paper_override=False)
+        result["requested_mode"] = "live"
+        return result
+    except RuntimeSettingsError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 @router.get("/runtime/auto-trading")
 def get_auto_trading_status():
     """Get current auto-trading configuration status."""

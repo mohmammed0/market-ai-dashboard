@@ -1151,8 +1151,10 @@ def save_alpaca_runtime_settings(
     return overview
 
 
-def test_alpaca_runtime_settings() -> dict:
+def test_alpaca_runtime_settings(*, paper_override: bool | None = None) -> dict:
     payload = get_alpaca_runtime_config()
+    if paper_override is not None:
+        payload = {**payload, "paper": bool(paper_override)}
     mode = "paper" if payload["paper"] else "live"
     secrets = [payload["api_key"], payload["secret_key"]]
     if payload["provider"] != "alpaca":
