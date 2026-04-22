@@ -115,7 +115,7 @@ BROKER_LIVE_EXECUTION_ENABLED = os.getenv("MARKET_AI_BROKER_LIVE_EXECUTION_ENABL
 ALPACA_ENABLED = os.getenv("MARKET_AI_ALPACA_ENABLED", "1" if BROKER_PROVIDER == "alpaca" else "0").strip().lower() not in {"0", "false", "no"}
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "").strip()
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "").strip()
-ALPACA_PAPER = os.getenv("ALPACA_PAPER", "1").strip().lower() not in {"0", "false", "no"}
+ALPACA_PAPER = False
 ALPACA_URL_OVERRIDE = os.getenv("ALPACA_URL_OVERRIDE", "").strip()
 ALPACA_ACCOUNT_REFRESH_SECONDS = int(os.getenv("MARKET_AI_ALPACA_ACCOUNT_REFRESH_SECONDS", "15"))
 TRAINING_SUBPROCESS_ENABLED = os.getenv("MARKET_AI_TRAINING_SUBPROCESS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}

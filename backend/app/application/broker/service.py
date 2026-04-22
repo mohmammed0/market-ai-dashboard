@@ -27,7 +27,7 @@ def _to_status(payload: dict) -> BrokerStatus:
         "connected": bool(payload.get("connected", False)),
         "mode": payload.get("mode", "disabled"),
         "trading_mode": payload.get("trading_mode", "cash"),
-        "paper": bool(payload.get("paper", True)),
+        "paper": bool(payload.get("paper", False)),
         "live_execution_enabled": bool(payload.get("live_execution_enabled", False)),
         "order_submission_enabled": bool(payload.get("order_submission_enabled", False)),
         "detail": payload.get("detail", ""),
@@ -98,7 +98,6 @@ def get_broker_orders(refresh: bool = False) -> dict:
 def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
     before = get_broker_summary(refresh=True)
     mode = str(before.get("mode") or "disabled").strip().lower()
-    paper = bool(before.get("paper", False))
     provider = str(before.get("provider") or "none")
     live_execution_enabled = bool(before.get("live_execution_enabled", False))
     before_positions = len(before.get("positions") or [])
@@ -111,20 +110,18 @@ def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
             "audit": {
                 "provider": provider,
                 "mode": mode,
-                "paper": paper,
                 "before_positions": before_positions,
                 "before_open_orders": before_open_orders,
             },
         }
 
-    if not paper or mode != "paper" or live_execution_enabled:
+    if not live_execution_enabled:
         return {
             "ok": False,
-            "error": "Refusing to liquidate a non-paper broker account.",
+            "error": "Live execution is disabled; cannot liquidate broker account.",
             "audit": {
                 "provider": provider,
                 "mode": mode,
-                "paper": paper,
                 "live_execution_enabled": live_execution_enabled,
                 "before_positions": before_positions,
                 "before_open_orders": before_open_orders,
@@ -145,7 +142,7 @@ def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
         log_event(
             logger,
             logging.WARNING,
-            "broker.paper_reset.executed",
+            "broker.liquidation.executed",
             provider=provider,
             before_positions=before_positions,
             after_positions=len((after or {}).get("positions") or []),
@@ -157,7 +154,7 @@ def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
         log_event(
             logger,
             logging.WARNING,
-            "broker.paper_reset.failed",
+            "broker.liquidation.failed",
             provider=provider,
             before_positions=before_positions,
             before_open_orders=before_open_orders,
@@ -167,7 +164,6 @@ def liquidate_broker_positions(cancel_open_orders: bool = True) -> dict:
     result["audit"] = {
         "provider": provider,
         "mode": mode,
-        "paper": paper,
         "live_execution_enabled": live_execution_enabled,
         "before_positions": before_positions,
         "before_open_orders": before_open_orders,

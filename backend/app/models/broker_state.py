@@ -11,7 +11,7 @@ class BrokerAccountSnapshot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     provider: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
-    mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="paper")
+    mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="live")
     account_id: Mapped[str | None] = mapped_column(String(120), index=True)
     status: Mapped[str | None] = mapped_column(String(40), index=True)
     cash: Mapped[float | None] = mapped_column(Float)
@@ -28,7 +28,7 @@ class BrokerPositionSnapshot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     provider: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
-    mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="paper")
+    mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="live")
     account_id: Mapped[str | None] = mapped_column(String(120), index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     side: Mapped[str | None] = mapped_column(String(32))

@@ -114,7 +114,7 @@ export function buildBrokerPortfolioSnapshot(summary) {
 
   return {
     source: "broker",
-    mode: summary.mode || "paper",
+    mode: summary.mode || "live",
     account: summary.account,
     positions,
     items: positions,

@@ -316,7 +316,7 @@ def _notify_trade(symbol: str, qty: float, side: str, order: dict):
         if not is_telegram_configured():
             return
         emoji = "🟢" if side.upper() == "BUY" else "🔴"
-        mode = order.get("mode", "paper")
+        mode = order.get("mode", "live")
         msg = (
             f"{emoji} <b>تنفيذ {side.upper()}</b>\n"
             f"📊 السهم: <b>{symbol}</b>\n"
@@ -1256,7 +1256,7 @@ def _record_portfolio_snapshot_event(repo: ExecutionRepository, *, correlation_i
     if hasattr(repo.session, "add"):
         PlatformEventRepository(repo.session).append_portfolio_snapshot(
             snapshot_type=snapshot_type,
-            active_source="internal_paper",
+            active_source="broker_live",
             correlation_id=correlation_id,
             summary=snapshot.get("summary") or {},
             positions=snapshot.get("positions") or [],
@@ -1266,13 +1266,13 @@ def _record_portfolio_snapshot_event(repo: ExecutionRepository, *, correlation_i
         producer="execution_service",
         payload={
             "snapshot_type": snapshot_type,
-            "active_source": "internal_paper",
+            "active_source": "broker_live",
             "summary": snapshot.get("summary") or {},
             "positions": snapshot.get("positions") or [],
         },
         correlation_id=correlation_id,
     )
-    emit_counter("portfolio_snapshots_total", snapshot_type=snapshot_type, source="internal_paper")
+    emit_counter("portfolio_snapshots_total", snapshot_type=snapshot_type, source="broker_live")
 
 
 def _apply_trade_intent(
@@ -1772,7 +1772,7 @@ def refresh_signals(
 
     # Use the caller-supplied idempotency key as the correlation_id when given;
     # otherwise generate a fresh one.
-    correlation_id = str(idempotency_key).strip() if idempotency_key else f"paper-refresh-{uuid4().hex[:12]}"
+    correlation_id = str(idempotency_key).strip() if idempotency_key else f"signal-refresh-{uuid4().hex[:12]}"
 
     # --- kill switch ---------------------------------------------------------
     if is_halted():
@@ -2006,11 +2006,11 @@ def refresh_signals(
 
 
 def _broker_active_source(broker: dict) -> str:
-    return "broker_live" if not bool(broker.get("paper", True)) else "broker_paper"
+    return "broker_live"
 
 
 def _broker_environment_label(broker: dict) -> str:
-    return "external_live" if not bool(broker.get("paper", True)) else "external_paper"
+    return "external_live"
 
 
 def _normalize_broker_order_record(item: dict, *, broker_source: str, broker_environment: str) -> dict:
@@ -2141,7 +2141,7 @@ def get_internal_portfolio(limit: int = 500) -> dict:
             "active_source": broker_source,
             "provider": broker.get("provider", "none"),
             "connected": bool(broker.get("connected")),
-            "mode": broker.get("mode", "paper"),
+            "mode": broker.get("mode", "live"),
             "open_positions": len(positions),
             "open_orders": len(
                 [
@@ -2405,7 +2405,7 @@ def create_paper_order(
     if not bool(result.get("ok")):
         raise ValueError(result.get("error") or "Broker order submission failed.")
 
-    broker_environment = "external_live" if not bool(broker_status.get("paper", True)) else "external_paper"
+    broker_environment = "external_live"
     order_payload = _normalize_broker_order_record(
         result.get("order") or {},
         broker_source=_broker_active_source(broker_status),
@@ -2528,7 +2528,7 @@ def cancel_paper_order(order_id: str) -> dict:
                 correlation_id=f"broker-cancel-{normalized_order_id}",
                 payload={
                     "order_id": normalized_order_id,
-                    "broker_environment": "external_live" if not bool(broker_status.get("paper", True)) else "external_paper",
+                    "broker_environment": "external_live",
                     "deprecated_internal_paper_route": True,
                     "internal_paper_enabled": False,
                 },
@@ -2541,7 +2541,7 @@ def cancel_paper_order(order_id: str) -> dict:
         "order_source": "broker",
         "execution_source": "broker",
         "broker_execution_mode": "broker_managed",
-        "broker_environment": "external_live" if not bool(broker_status.get("paper", True)) else "external_paper",
+        "broker_environment": "external_live",
         "deprecated_internal_paper_route": True,
         "internal_paper_enabled": False,
     }
@@ -2558,7 +2558,6 @@ def get_paper_control_panel(*, broker_refresh: bool = False, limit: int = 50) ->
     broker = get_broker_summary(refresh=broker_refresh)
 
     return {
-        "paper_mode_only": False,
         "broker_managed_only": True,
         "internal_paper_enabled": False,
         "account_source": "broker",
@@ -2567,7 +2566,7 @@ def get_paper_control_panel(*, broker_refresh: bool = False, limit: int = 50) ->
         "execution_source": "broker",
         "broker_execution_mode": "broker_managed",
         "broker_environment": _broker_environment_label(broker),
-        "detail": "Internal paper trading is disabled. This control panel is backed by the external broker account.",
+        "detail": "Internal simulation is disabled. This control panel is backed by the external broker account.",
         "broker": broker,
         "portfolio": portfolio,
         "open_orders": open_orders,
@@ -2582,6 +2581,6 @@ def get_paper_control_panel(*, broker_refresh: bool = False, limit: int = 50) ->
             "recent_trades": len(trades.get("items", [])),
             "recent_alerts": alerts.get("count", 0),
             "broker_connected": bool(broker.get("connected")),
-            "broker_mode": broker.get("mode") or "paper",
+            "broker_mode": broker.get("mode") or "live",
         },
     }

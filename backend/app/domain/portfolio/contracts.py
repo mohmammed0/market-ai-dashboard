@@ -39,10 +39,10 @@ class PortfolioSnapshot(BaseModel):
 
 
 class PortfolioViewSummary(BaseModel):
-    active_source: Literal["internal_paper", "broker_paper", "broker_live"] = "internal_paper"
-    provider: str = "internal"
+    active_source: Literal["internal_paper", "broker_paper", "broker_live"] = "broker_live"
+    provider: str = "broker"
     connected: bool = False
-    mode: str = "paper"
+    mode: str = "live"
     open_positions: int = 0
     open_orders: int = 0
     total_market_value: float = 0.0
@@ -58,7 +58,7 @@ class PortfolioViewSummary(BaseModel):
 
 
 class PortfolioViewPosition(BaseModel):
-    portfolio_source: str = "internal_paper"
+    portfolio_source: str = "broker_live"
     symbol: str
     side: str
     quantity: float = 0.0
@@ -86,7 +86,7 @@ class PortfolioViewPosition(BaseModel):
 class PortfolioViewOrder(BaseModel):
     id: str | int | None = None
     client_order_id: str | None = None
-    portfolio_source: str = "internal_paper"
+    portfolio_source: str = "broker_live"
     symbol: str = ""
     side: str = ""
     order_type: str | None = None
@@ -105,7 +105,7 @@ class PortfolioViewOrder(BaseModel):
 
 class PortfolioViewTrade(BaseModel):
     id: str | int | None = None
-    portfolio_source: str = "internal_paper"
+    portfolio_source: str = "broker_live"
     symbol: str = ""
     side: str = ""
     quantity: float = 0.0
@@ -118,7 +118,7 @@ class PortfolioViewTrade(BaseModel):
 
 class PortfolioSnapshotPayload(BaseModel):
     generated_at: datetime
-    active_source: Literal["internal_paper", "broker_paper", "broker_live"] = "internal_paper"
+    active_source: Literal["internal_paper", "broker_paper", "broker_live"] = "broker_live"
     broker_connected: bool = False
     summary: PortfolioViewSummary
     positions: list[PortfolioViewPosition] = Field(default_factory=list)
@@ -134,5 +134,5 @@ class PortfolioSnapshotPayload(BaseModel):
 
 class PortfolioSnapshotV1(PortfolioSnapshotPayload):
     contract_version: Literal["v1"] = "v1"
-    source_type: Literal["broker", "internal"] = "internal"
-    source_label: str = "Legacy Snapshot"
+    source_type: Literal["broker", "internal"] = "broker"
+    source_label: str = "Broker Live"

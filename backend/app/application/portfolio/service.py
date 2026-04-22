@@ -35,9 +35,7 @@ _BROKER_TERMINAL_ORDER_STATUSES = {
 }
 
 _PORTFOLIO_SOURCE_LABELS = {
-    "broker_paper": ("broker", "Broker Account"),
     "broker_live": ("broker", "Broker Live"),
-    "internal_paper": ("internal", "Legacy Snapshot"),
 }
 
 
@@ -75,7 +73,7 @@ def _parse_datetime(value) -> datetime | None:
 
 def _normalize_internal_position(item: dict) -> PortfolioViewPosition:
     return PortfolioViewPosition(
-        portfolio_source="internal_paper",
+        portfolio_source="broker_live",
         symbol=_normalize_text(item.get("symbol"), "-"),
         side=_normalize_text(item.get("side")).upper(),
         quantity=_safe_float(item.get("quantity")),
@@ -120,7 +118,7 @@ def _normalize_internal_order(item: dict) -> PortfolioViewOrder:
     return PortfolioViewOrder(
         id=item.get("id"),
         client_order_id=_normalize_text(item.get("client_order_id")) or None,
-        portfolio_source="internal_paper",
+        portfolio_source="broker_live",
         symbol=_normalize_text(item.get("symbol"), "-"),
         side=_normalize_text(item.get("side")).upper(),
         order_type=order_type,
@@ -170,7 +168,7 @@ def _is_open_broker_order(order: PortfolioViewOrder) -> bool:
 def _normalize_internal_trade(item: dict) -> PortfolioViewTrade:
     return PortfolioViewTrade(
         id=item.get("id"),
-        portfolio_source="internal_paper",
+        portfolio_source="broker_live",
         symbol=_normalize_text(item.get("symbol"), "-"),
         side=_normalize_text(item.get("side")).upper(),
         quantity=_safe_float(item.get("quantity")),
@@ -271,10 +269,10 @@ def _build_internal_snapshot_view(internal: dict) -> tuple[
     internal_summary = internal.get("summary", {})
     win_rate_value = internal_summary.get("win_rate_pct")
     summary = PortfolioViewSummary(
-        active_source="internal_paper",
-        provider="internal",
+        active_source="broker_live",
+        provider="broker",
         connected=False,
-        mode="paper",
+        mode="live",
         open_positions=int(internal_summary.get("open_positions") or 0),
         open_orders=len(open_orders),
         total_market_value=round(_safe_float(internal_summary.get("total_market_value")), 4),
@@ -323,7 +321,7 @@ def _build_broker_snapshot_view(
         active_source=broker_source,
         provider=_normalize_text(broker.get("provider"), "alpaca"),
         connected=True,
-        mode=_normalize_text(broker.get("mode"), "paper"),
+        mode=_normalize_text(broker.get("mode"), "live"),
         open_positions=len(positions),
         open_orders=len(open_orders),
         total_market_value=round(total_market_value, 4),
@@ -342,7 +340,7 @@ def _build_broker_snapshot_view(
 
 def _build_canonical_positions(internal: dict, broker: dict) -> list[PortfolioPosition]:
     raw_positions: list[PortfolioPosition] = []
-    broker_source = "broker_paper" if broker.get("paper", True) else "broker_live"
+    broker_source = "broker_live"
     for item in broker.get("positions", []):
         raw_positions.append(
             PortfolioPosition(
@@ -441,7 +439,7 @@ def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
     broker = get_broker_summary()
     canonical_snapshot = build_canonical_portfolio_snapshot(internal={}, broker=broker)
     broker_connected = bool(broker.get("connected"))
-    broker_source = "broker_paper" if broker.get("paper", True) else "broker_live"
+    broker_source = "broker_live"
 
     if broker_connected:
         positions, orders, open_orders, trades, summary = _build_broker_snapshot_view(broker, broker_source)
@@ -470,7 +468,7 @@ def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
         )
 
     source_type, source_label = _PORTFOLIO_SOURCE_LABELS.get(summary.active_source, ("broker", "Broker Managed"))
-    broker_environment = "external_live" if summary.active_source == "broker_live" else "external_paper"
+    broker_environment = "external_live"
 
     return PortfolioSnapshotV1(
         generated_at=datetime.utcnow(),
@@ -491,7 +489,7 @@ def build_portfolio_snapshot_payload() -> PortfolioSnapshotV1:
             "sdk_installed": bool(broker.get("sdk_installed", False)),
             "connected": broker_connected,
             "mode": broker.get("mode", "disabled"),
-            "paper": bool(broker.get("paper", True)),
+            "paper": False,
             "live_execution_enabled": bool(broker.get("live_execution_enabled", False)),
             "order_submission_enabled": bool(broker.get("order_submission_enabled", False)),
             "detail": broker.get("detail", ""),
