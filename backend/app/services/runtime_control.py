@@ -79,7 +79,7 @@ def get_runtime_control_plane() -> dict[str, Any]:
                 "live_execution_source": "unknown",
                 "alpaca": {
                     "enabled": False,
-                    "paper": True,
+                    "paper": False,
                     "configured": False,
                 },
             },
@@ -91,7 +91,7 @@ def get_runtime_control_plane() -> dict[str, Any]:
     provider = str((broker or {}).get("provider") or "none").lower()
     effective_broker_mode = "disabled"
     if provider == "alpaca":
-        effective_broker_mode = "paper" if bool((alpaca or {}).get("paper", True)) else "live"
+        effective_broker_mode = "live"
 
     return {
         "environment": APP_ENV,
@@ -140,7 +140,6 @@ def get_runtime_control_plane() -> dict[str, Any]:
             "live_execution_source": broker.get("live_execution_source"),
             "alpaca_enabled": bool((alpaca or {}).get("enabled", False)),
             "alpaca_configured": bool((alpaca or {}).get("configured", False)),
-            "alpaca_paper": bool((alpaca or {}).get("paper", True)),
         },
         "storage": {
             "database": settings.get("database", {}),

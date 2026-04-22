@@ -80,7 +80,6 @@ export default function SettingsPage() {
   const [testingAlpaca, setTestingAlpaca] = useState(false);
   const [alpacaForm, setAlpacaForm] = useState({
     enabled: false,
-    paper: true,
     tradingMode: "cash",
     apiKey: "",
     secretKey: "",
@@ -122,7 +121,6 @@ export default function SettingsPage() {
     const autoConfig = runtimeSettings?.auto_trading || autoTradingInfo || {};
     setAlpacaForm({
       enabled: Boolean(runtimeSettings?.broker?.alpaca?.enabled),
-      paper: Boolean(runtimeSettings?.broker?.alpaca?.paper ?? true),
       tradingMode: runtimeSettings?.broker?.trading_mode === "margin" ? "margin" : "cash",
       apiKey: "",
       secretKey: "",
@@ -166,7 +164,6 @@ export default function SettingsPage() {
       const r = await saveAlpacaSettings({
         enabled: alpacaForm.enabled,
         provider: "alpaca",
-        paper: alpacaForm.paper,
         trading_mode: alpacaForm.tradingMode,
         api_key: alpacaForm.apiKey || undefined,
         secret_key: alpacaForm.secretKey || undefined,
@@ -287,7 +284,6 @@ export default function SettingsPage() {
             <div className="settings-banner-meta">
               <span>Alpaca: {autoTradingInfo.alpaca_configured ? "مفعل" : "غير مفعل"}</span>
               <span>الاوامر: {autoTradingInfo.order_submission_enabled ? "مفعل" : "معطل"}</span>
-              <span>الوضع: {autoTradingInfo.alpaca_paper ? "ورقي" : "حقيقي"}</span>
               <span>النمط: {autoTradingInfo.trading_mode === "margin" ? "مارجن" : "كاش"}</span>
               <span>الدورة: {autoTradingInfo.cycle_minutes || 30} دقيقة</span>
               <span>الاستراتيجية: {labelForOption(AUTO_TRADING_STRATEGY_OPTIONS, autoTradingInfo.strategy_mode, "Classic Ranking")}</span>
@@ -361,13 +357,6 @@ export default function SettingsPage() {
               <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                 <input type="checkbox" checked={alpacaForm.enabled} onChange={(e) => setAlpacaForm((p) => ({ ...p, enabled: e.target.checked }))} />
                 <span className="text-sm">{alpacaForm.enabled ? "نعم" : "لا"}</span>
-              </label>
-            </div>
-            <div className="settings-row">
-              <span className="settings-row-label">الوضع الورقي</span>
-              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                <input type="checkbox" checked={alpacaForm.paper} onChange={(e) => setAlpacaForm((p) => ({ ...p, paper: e.target.checked }))} />
-                <span className="text-sm">{alpacaForm.paper ? "ورقي" : "حي"}</span>
               </label>
             </div>
             <div className="settings-row">

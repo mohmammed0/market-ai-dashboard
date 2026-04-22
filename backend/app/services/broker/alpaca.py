@@ -132,7 +132,7 @@ class AlpacaBrokerProvider(BrokerProvider):
 
     @staticmethod
     def _mode(config: dict) -> str:
-        return "paper" if config.get("paper", True) else "live"
+        return "live"
 
     @staticmethod
     def _summarize_exception(exc: Exception) -> str:
@@ -161,7 +161,7 @@ class AlpacaBrokerProvider(BrokerProvider):
             configured=bool(config.get("api_key") and config.get("secret_key")),
             sdk_installed=TradingClient is not None,
             mode=self._mode(config),
-            paper=bool(config.get("paper", True)),
+            paper=False,
             live_execution_enabled=bool(config.get("live_execution_enabled", False)),
             order_submission_enabled=bool(config.get("order_submission_enabled", False)),
             detail="Alpaca broker integration is ready."
@@ -187,7 +187,7 @@ class AlpacaBrokerProvider(BrokerProvider):
             return None, status
         try:
             config = get_alpaca_runtime_config()
-            kwargs = {"paper": bool(config.get("paper", True))}
+            kwargs = {"paper": False}
             if config.get("url_override"):
                 kwargs["url_override"] = config["url_override"]
             return TradingClient(config["api_key"], config["secret_key"], **kwargs), None
@@ -359,7 +359,7 @@ class AlpacaBrokerProvider(BrokerProvider):
                      estimated_price: float | None = None,
                      stop_price: float | None = None, take_profit_price: float | None = None,
                      stop_loss_price: float | None = None) -> dict:
-        """Submit an order to Alpaca paper/live account."""
+        """Submit an order to Alpaca live account."""
         client, status = self._client()
         if client is None:
             return {"ok": False, "error": status.get("detail", "Cannot connect to Alpaca"), "order": None}

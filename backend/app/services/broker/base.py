@@ -32,10 +32,8 @@ class BrokerProvider:
         effective_mode = str(overrides.get("mode", self.mode) or "").strip().lower()
         environment = overrides.get("broker_environment")
         if not str(environment or "").strip():
-            environment = "external_paper"
-        if effective_mode == "live":
             environment = "external_live"
-        elif effective_mode == "disabled":
+        if effective_mode == "disabled":
             environment = "disabled"
         payload = {
             "provider": self.provider_name,
@@ -45,7 +43,7 @@ class BrokerProvider:
             "connected": False,
             "mode": effective_mode or self.mode,
             "trading_mode": guardrails["trading_mode"],
-            "paper": True,
+            "paper": False,
             "live_execution_enabled": guardrails["live_execution_enabled"],
             "order_submission_enabled": guardrails["order_submission_enabled"],
             "broker_execution_mode": "broker_managed",

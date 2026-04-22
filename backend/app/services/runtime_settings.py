@@ -170,7 +170,6 @@ SETTING_SPECS: dict[str, SettingSpec] = {
     "alpaca.enabled": SettingSpec("alpaca.enabled", "MARKET_AI_ALPACA_ENABLED", False, kind="bool"),
     "alpaca.api_key": SettingSpec("alpaca.api_key", "ALPACA_API_KEY", "", secret=True),
     "alpaca.secret_key": SettingSpec("alpaca.secret_key", "ALPACA_SECRET_KEY", "", secret=True),
-    "alpaca.paper": SettingSpec("alpaca.paper", "ALPACA_PAPER", True, kind="bool"),
     "alpaca.url_override": SettingSpec("alpaca.url_override", "ALPACA_URL_OVERRIDE", ""),
     "auto_trading.enabled": SettingSpec(
         "auto_trading.enabled",
@@ -519,7 +518,7 @@ _ALPACA_TRADING_ENDPOINT_SEGMENTS = {
     "options",
     "corporate_actions",
 }
-_ALPACA_TRADING_HOSTS = {"api.alpaca.markets", "paper-api.alpaca.markets"}
+_ALPACA_TRADING_HOSTS = {"api.alpaca.markets"}
 _ALPACA_INVALID_TRADING_HOSTS = {
     "broker-api.alpaca.markets",
     "broker-api.sandbox.alpaca.markets",
@@ -763,7 +762,8 @@ def _build_broker_payload(records: dict[str, dict[str, Any]] | None = None, *, i
     alpaca_enabled, alpaca_enabled_source = _resolve_setting("alpaca.enabled", records)
     alpaca_api_key, alpaca_api_key_source = _resolve_setting("alpaca.api_key", records)
     alpaca_secret_key, alpaca_secret_key_source = _resolve_setting("alpaca.secret_key", records)
-    alpaca_paper, alpaca_paper_source = _resolve_setting("alpaca.paper", records)
+    alpaca_paper = False
+    alpaca_paper_source = "forced_live"
     alpaca_url_override, alpaca_url_override_source = _resolve_setting("alpaca.url_override", records)
     alpaca_url_override = _normalize_alpaca_url_override(alpaca_url_override)
 
@@ -935,7 +935,6 @@ def save_alpaca_runtime_settings(
     *,
     enabled: bool,
     provider: str,
-    paper: bool,
     trading_mode: str | None = None,
     api_key: str | None = None,
     secret_key: str | None = None,
@@ -1011,7 +1010,7 @@ def save_alpaca_runtime_settings(
         _upsert_setting(session, "broker.provider", clean_provider)
         _upsert_setting(session, "broker.trading_mode", clean_trading_mode)
         _upsert_setting(session, "alpaca.enabled", enabled)
-        _upsert_setting(session, "alpaca.paper", paper)
+        _delete_setting(session, "alpaca.paper")
         if clear_api_key:
             _delete_setting(session, "alpaca.api_key")
         elif api_key is not None and str(api_key).strip():
@@ -1152,7 +1151,6 @@ def save_alpaca_runtime_settings(
         provider=overview.get("provider"),
         trading_mode=overview.get("trading_mode"),
         enabled=alpaca_overview.get("enabled"),
-        paper=alpaca_overview.get("paper"),
         api_key_updated=bool(api_key),
         secret_key_updated=bool(secret_key),
         api_key_cleared=bool(clear_api_key),
@@ -1164,11 +1162,9 @@ def save_alpaca_runtime_settings(
     return overview
 
 
-def test_alpaca_runtime_settings(*, paper_override: bool | None = None) -> dict:
+def test_alpaca_runtime_settings() -> dict:
     payload = get_alpaca_runtime_config()
-    if paper_override is not None:
-        payload = {**payload, "paper": bool(paper_override)}
-    mode = "paper" if payload["paper"] else "live"
+    mode = "live"
     secrets = [payload["api_key"], payload["secret_key"]]
     if payload["provider"] != "alpaca":
         result = {"ok": False, "detail": "Broker provider is disabled.", "mode": mode}
@@ -1195,7 +1191,7 @@ def test_alpaca_runtime_settings(*, paper_override: bool | None = None) -> dict:
         return result
 
     try:
-        kwargs = {"paper": payload["paper"]}
+        kwargs = {"paper": False}
         if payload["url_override"]:
             kwargs["url_override"] = payload["url_override"]
         client = TradingClient(payload["api_key"], payload["secret_key"], **kwargs)
@@ -1444,7 +1440,7 @@ def get_auto_trading_config() -> dict:
         "order_submission_source": order_sub_source,
         "alpaca_enabled": alpaca_config.get("enabled", False),
         "alpaca_configured": alpaca_config.get("configured", False),
-        "alpaca_paper": alpaca_config.get("paper", True),
+        "alpaca_paper": False,
         "ready": bool(auto_enabled) and bool(order_sub) and alpaca_config.get("enabled", False) and alpaca_config.get("configured", False),
     }
 
