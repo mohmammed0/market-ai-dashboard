@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import { getJson } from "../api/client";
 
@@ -6,25 +6,53 @@ const AppDataContext = createContext(null);
 
 export function AppDataProvider({ children }) {
   const [store, setStore] = useState({});
+  const inflight = useRef(new Map());
+  const controllers = useRef(new Map());
+  const isMounted = useRef(true);
 
   function updateSection(key, patch) {
     setStore(prev => ({ ...prev, [key]: { ...(prev[key] || {}), ...patch } }));
   }
 
   async function fetchSection(key, url, options = {}) {
-    updateSection(key, { loading: true });
-    try {
-      const data = await getJson(url, {
-        cacheTtlMs: options.cacheTtlMs ?? 0,
-        forceFresh: options.forceFresh ?? false,
-      });
-      updateSection(key, { data, loading: false, error: null, lastFetch: Date.now() });
-    } catch (e) {
-      updateSection(key, { loading: false, error: e.message });
+    if (inflight.current.has(key)) {
+      return inflight.current.get(key);
     }
+
+    const controller = new AbortController();
+    controllers.current.set(key, controller);
+    updateSection(key, { loading: true });
+
+    const request = getJson(url, {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
+      forceFresh: options.forceFresh ?? false,
+      signal: controller.signal,
+    })
+      .then(data => {
+        if (!isMounted.current || controller.signal.aborted) {
+          return null;
+        }
+        updateSection(key, { data, loading: false, error: null, lastFetch: Date.now() });
+        return data;
+      })
+      .catch(error => {
+        if (!isMounted.current || controller.signal.aborted) {
+          return null;
+        }
+        updateSection(key, { loading: false, error: error?.message || "حدث خطأ غير متوقع" });
+        return null;
+      })
+      .finally(() => {
+        inflight.current.delete(key);
+        controllers.current.delete(key);
+      });
+
+    inflight.current.set(key, request);
+    return request;
   }
 
   useEffect(() => {
+    isMounted.current = true;
     const sections = [
       { key: "dashboardLite",   url: "/api/dashboard/lite",            interval: 45000, cacheTtlMs: 5000 },
       { key: "portfolioSnapshot", url: "/api/portfolio/snapshot",      interval: 30000, cacheTtlMs: 5000 },
@@ -40,7 +68,15 @@ export function AppDataProvider({ children }) {
       timers.push(t);
     });
 
-    return () => timers.forEach(clearInterval);
+    return () => {
+      isMounted.current = false;
+      timers.forEach(clearInterval);
+      for (const controller of controllers.current.values()) {
+        controller.abort();
+      }
+      controllers.current.clear();
+      inflight.current.clear();
+    };
   }, []);
 
   return (

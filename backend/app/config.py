@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 
 from core.runtime_env import ENV_BOOTSTRAP_INFO
+from core.date_defaults import DEFAULT_ANALYSIS_LOOKBACK_DAYS, DEFAULT_TRAINING_LOOKBACK_DAYS
+
 from core.runtime_paths import (
     BACKUPS_DIR,
     DATA_DIR,
@@ -50,8 +52,6 @@ API_HOST = os.getenv("MARKET_AI_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("MARKET_AI_PORT", "8000"))
 LOG_LEVEL = os.getenv("MARKET_AI_LOG_LEVEL", "INFO").strip().upper()
 FOCUSED_PRODUCT_MODE = os.getenv("MARKET_AI_FOCUSED_PRODUCT_MODE", "1" if APP_ENV == "production" else "0").strip().lower() not in {"0", "false", "no"}
-DEFAULT_ANALYSIS_LOOKBACK_DAYS = max(7, int(os.getenv("MARKET_AI_DEFAULT_ANALYSIS_LOOKBACK_DAYS", "30")))
-DEFAULT_TRAINING_LOOKBACK_DAYS = max(90, int(os.getenv("MARKET_AI_DEFAULT_TRAINING_LOOKBACK_DAYS", "365")))
 DEFAULT_TRACKED_SYMBOL_LIMIT = max(5, min(int(os.getenv("MARKET_AI_DEFAULT_TRACKED_SYMBOL_LIMIT", "10")), 25))
 LIGHTWEIGHT_EXPERIMENT_MODE = os.getenv("MARKET_AI_LIGHTWEIGHT_EXPERIMENT_MODE", "0").strip().lower() not in {"0", "false", "no"}
 LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL = LIGHTWEIGHT_EXPERIMENT_MODE and os.getenv("MARKET_AI_LIGHTWEIGHT_EXPERIMENT_INCLUDE_DL", "1").strip().lower() not in {"0", "false", "no"}
@@ -435,8 +435,35 @@ def _parse_allowed_origins() -> list[str]:
     items = [origin.strip().rstrip("/") for origin in str(raw_value).split(",") if origin.strip()]
     return items
 
+_DEFAULT_ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+_DEFAULT_ALLOWED_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "Accept",
+    "Origin",
+    "X-Requested-With",
+]
+
+
+def _parse_allowed_methods() -> list[str]:
+    raw_value = os.getenv("MARKET_AI_ALLOWED_METHODS")
+    if raw_value is None or not str(raw_value).strip():
+        return ["*"] if APP_ENV != "production" else list(_DEFAULT_ALLOWED_METHODS)
+    return [item.strip().upper() for item in str(raw_value).split(",") if item.strip()]
+
+
+def _parse_allowed_headers() -> list[str]:
+    raw_value = os.getenv("MARKET_AI_ALLOWED_HEADERS")
+    if raw_value is None or not str(raw_value).strip():
+        return ["*"] if APP_ENV != "production" else list(_DEFAULT_ALLOWED_HEADERS)
+    return [item.strip() for item in str(raw_value).split(",") if item.strip()]
+
+
 
 ALLOWED_ORIGINS = _parse_allowed_origins()
+ALLOWED_METHODS = _parse_allowed_methods()
+ALLOWED_HEADERS = _parse_allowed_headers()
+
 BACKGROUND_JOB_MAX_ACTIVE_TOTAL = max(1, int(os.getenv("MARKET_AI_BACKGROUND_JOB_MAX_ACTIVE_TOTAL", "4")))
 BACKGROUND_JOB_MAX_ACTIVE_PER_TYPE = max(1, int(os.getenv("MARKET_AI_BACKGROUND_JOB_MAX_ACTIVE_PER_TYPE", "2")))
 BACKGROUND_JOB_STALE_PENDING_SECONDS = max(30, int(os.getenv("MARKET_AI_BACKGROUND_JOB_STALE_PENDING_SECONDS", "300")))

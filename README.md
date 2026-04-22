@@ -94,6 +94,14 @@ Modern code reaches legacy logic only through:
 - `/api/broker/status`
 - `/api/trading/portfolio`
 
+
+## Configuration Notes
+
+- Default admin credentials can be set via `MARKET_AI_AUTH_DEFAULT_USERNAME` and `MARKET_AI_AUTH_DEFAULT_PASSWORD`.
+  When provided, the password hash is persisted in runtime settings (`auth.default_password_hash`) for restarts.
+- CORS can be tightened in production with `MARKET_AI_ALLOWED_METHODS` and `MARKET_AI_ALLOWED_HEADERS`.
+- Shared date defaults live in `core/date_defaults.py` and are re-exported for backend usage.
+
 ## Development Rules
 
 - Preserve broker-managed execution as the single source of execution truth.

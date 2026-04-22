@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from core.date_defaults import indicator_warmup_start_date_iso, recent_end_date_iso, recent_start_date_iso
 from core.legacy_adapters.analysis import run_analysis as engine_run_analysis
 from core.signal_intelligence import enhance_signal
-from backend.app.core.date_defaults import indicator_warmup_start_date_iso, recent_end_date_iso, recent_start_date_iso
 
 
 def _trim_chart_data(chart_data: dict, visible_start_date: str, visible_end_date: str) -> dict:

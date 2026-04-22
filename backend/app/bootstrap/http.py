@@ -10,6 +10,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.app.config import (
+    ALLOWED_HEADERS,
+    ALLOWED_METHODS,
     ALLOWED_ORIGINS,
     APP_ENV,
     AUTH_ENABLED,
@@ -41,8 +43,8 @@ def configure_middlewares(app: FastAPI) -> None:
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=ALLOWED_METHODS,
+        allow_headers=ALLOWED_HEADERS,
     )
 
 
