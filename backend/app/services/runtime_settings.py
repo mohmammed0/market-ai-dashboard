@@ -85,6 +85,7 @@ from backend.app.config import (
     AUTO_TRADING_KRONOS_DEVICE_PREFERENCE,
     AUTO_TRADING_KRONOS_TIMEOUT_SECONDS,
     AUTO_TRADING_KRONOS_WARMUP_ENABLED,
+    AUTH_DEFAULT_USERNAME,
     AUTO_TRADING_KRONOS_BATCH_PREOPEN_ENABLED,
     AUTO_TRADING_KRONOS_CACHE_TTL_SECONDS,
     AUTO_TRADING_KRONOS_WEIGHT,
@@ -136,6 +137,18 @@ class SettingSpec:
 
 
 SETTING_SPECS: dict[str, SettingSpec] = {
+    "auth.default_username": SettingSpec(
+        "auth.default_username",
+        "MARKET_AI_AUTH_DEFAULT_USERNAME",
+        AUTH_DEFAULT_USERNAME,
+    ),
+    "auth.default_password_hash": SettingSpec(
+        "auth.default_password_hash",
+        "MARKET_AI_AUTH_DEFAULT_PASSWORD_HASH",
+        "",
+        secret=True,
+    ),
+
     "broker.provider": SettingSpec("broker.provider", "MARKET_AI_BROKER_PROVIDER", "none"),
     "broker.trading_mode": SettingSpec(
         "broker.trading_mode",

@@ -45,6 +45,9 @@ security = HTTPBearer(auto_error=False)
 _PBKDF2_PREFIX = "pbkdf2_sha256"
 _PBKDF2_ITERATIONS = 390000
 
+_RUNTIME_USERNAME_KEY = "auth.default_username"
+_RUNTIME_PASSWORD_HASH_KEY = "auth.default_password_hash"
+
 
 def _legacy_hash_password(password: str) -> str:
     return hmac.new(AUTH_SECRET_KEY.encode(), password.encode(), hashlib.sha256).hexdigest()
@@ -72,13 +75,43 @@ def _verify_password(plain: str, hashed: str) -> bool:
     return hmac.compare_digest(_legacy_hash_password(plain), hashed)
 
 
+def _get_runtime_default_username() -> str:
+    try:
+        from backend.app.services.runtime_settings import get_runtime_setting_value
+
+        username = get_runtime_setting_value(_RUNTIME_USERNAME_KEY)
+        return str(username or "").strip()
+    except Exception:
+        return AUTH_DEFAULT_USERNAME
+
+
+def _get_runtime_password_hash() -> str:
+    try:
+        from backend.app.services.runtime_settings import get_runtime_setting_value
+
+        password_hash = get_runtime_setting_value(_RUNTIME_PASSWORD_HASH_KEY)
+        return str(password_hash or "").strip()
+    except Exception:
+        return ""
+
+
+def _persist_runtime_auth(username: str, password_hash: str) -> None:
+    try:
+        from backend.app.services.runtime_settings import set_runtime_setting_value
+
+        set_runtime_setting_value(_RUNTIME_USERNAME_KEY, username)
+        set_runtime_setting_value(_RUNTIME_PASSWORD_HASH_KEY, password_hash)
+    except Exception as exc:
+        logger.warning("Failed to persist auth defaults: %s", exc)
+
+
 def auth_configuration_warnings() -> list[str]:
     warnings: list[str] = []
     if not AUTH_ENABLED:
         return warnings
     if AUTH_SECRET_KEY_IS_DEFAULT:
         warnings.append("JWT secret is still using the development default value.")
-    if not AUTH_DEFAULT_PASSWORD:
+    if not AUTH_DEFAULT_PASSWORD and not _get_runtime_password_hash():
         warnings.append("No persistent admin password is configured.")
     return warnings
 
@@ -99,7 +132,18 @@ _users: dict[str, dict] = {}
 
 def _ensure_default_user() -> None:
     """Create default admin user if none exists."""
-    if not AUTH_DEFAULT_USERNAME or AUTH_DEFAULT_USERNAME in _users:
+    username = _get_runtime_default_username() or AUTH_DEFAULT_USERNAME
+    if not username or username in _users:
+        return
+
+    stored_password_hash = _get_runtime_password_hash()
+    if stored_password_hash:
+        _users[username] = {
+            "username": username,
+            "password_hash": stored_password_hash,
+            "role": "admin",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
         return
 
     if APP_ENV == "production" and not AUTH_DEFAULT_PASSWORD:
@@ -108,9 +152,10 @@ def _ensure_default_user() -> None:
         )
 
     password = AUTH_DEFAULT_PASSWORD or secrets.token_urlsafe(16)
-    _users[AUTH_DEFAULT_USERNAME] = {
-        "username": AUTH_DEFAULT_USERNAME,
-        "password_hash": _hash_password(password),
+    password_hash = _hash_password(password)
+    _users[username] = {
+        "username": username,
+        "password_hash": password_hash,
         "role": "admin",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -119,8 +164,10 @@ def _ensure_default_user() -> None:
             "No AUTH_DEFAULT_PASSWORD set. Generated a temporary in-memory password for the default user. "
             "Set MARKET_AI_AUTH_DEFAULT_PASSWORD for a persistent login.",
         )
-    else:
-        logger.info("Default auth user '%s' initialized.", AUTH_DEFAULT_USERNAME)
+        return
+
+    _persist_runtime_auth(username, password_hash)
+    logger.info("Default auth user '%s' initialized.", username)
 
 
 def authenticate_user(username: str, password: str) -> Optional[dict]:

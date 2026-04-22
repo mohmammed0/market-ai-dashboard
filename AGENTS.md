@@ -75,3 +75,9 @@ npm run test:e2e
 - Every frontend page must keep loading, error, and empty states.
 - Backend must degrade gracefully when external data/news sources fail.
 - Keep only safe environment templates in Git; runtime secrets stay outside Git.
+
+## Repo Notes
+- Shared date defaults now live in `core/date_defaults.py`; `backend/app/core/date_defaults.py` re-exports them.
+- Auth default credentials can persist via runtime settings keys `auth.default_username` and `auth.default_password_hash`.
+- CORS methods/headers are configurable via `MARKET_AI_ALLOWED_METHODS` and `MARKET_AI_ALLOWED_HEADERS` (production defaults are restricted).
+

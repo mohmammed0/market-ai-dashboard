@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+import { getApiBaseUrl } from "../api/client";
+
+const API_BASE = getApiBaseUrl();
 
 function getHeaders() {
   const token = localStorage.getItem("market_ai_token") || "";
