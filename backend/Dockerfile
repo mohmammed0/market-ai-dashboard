@@ -6,10 +6,14 @@ ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-COPY backend/requirements.txt /app/backend/requirements.txt
+ARG INSTALL_ML_DEPS=false
+
+COPY backend/requirements-api.txt /app/backend/requirements-api.txt
+COPY backend/requirements-ml.txt /app/backend/requirements-ml.txt
 
 RUN pip install --upgrade pip && \
-    pip install -r /app/backend/requirements.txt
+    pip install -r /app/backend/requirements-api.txt && \
+    if [ "$INSTALL_ML_DEPS" = "true" ]; then pip install -r /app/backend/requirements-ml.txt; fi
 
 COPY . /app
 RUN mkdir -p /app/data /app/model_artifacts /app/seed_data/source_seed

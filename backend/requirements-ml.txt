@@ -1,0 +1,9 @@
+vectorbt>=0.26.2
+scikit-learn>=1.5.0
+joblib>=1.4.0
+optuna>=3.6.0
+torch>=2.4.0
+huggingface_hub>=0.33.1
+einops>=0.8.1
+tqdm>=4.67.1
+safetensors>=0.4.3

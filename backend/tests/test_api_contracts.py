@@ -20,9 +20,9 @@ from backend.app.main import create_app
 class ApiContractsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.auth_enabled_patcher = patch("backend.app.main.AUTH_ENABLED", False)
-        cls.startup_patcher = patch("backend.app.main._startup_application_services", return_value=None)
-        cls.stop_scheduler_patcher = patch("backend.app.main.stop_scheduler", return_value=None)
+        cls.auth_enabled_patcher = patch("backend.app.api.routes.auth.AUTH_ENABLED", False)
+        cls.startup_patcher = patch("backend.app.bootstrap.runtime.startup_application_services", return_value=None)
+        cls.stop_scheduler_patcher = patch("backend.app.bootstrap.runtime.stop_scheduler", return_value=None)
         cls.auth_enabled_patcher.start()
         cls.startup_patcher.start()
         cls.stop_scheduler_patcher.start()

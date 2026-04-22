@@ -81,3 +81,8 @@ npm run test:e2e
 - Auth default credentials can persist via runtime settings keys `auth.default_username` and `auth.default_password_hash`.
 - CORS methods/headers are configurable via `MARKET_AI_ALLOWED_METHODS` and `MARKET_AI_ALLOWED_HEADERS` (production defaults are restricted).
 
+- Backend dependencies are split into `backend/requirements-api.txt`, `backend/requirements-ml.txt`, and `backend/requirements-dev.txt` (full install via `backend/requirements.txt`).
+- Legacy boundary enforcement uses `scripts/check_legacy_boundary.py` and is wired into CI.
+- Playwright E2E coverage is split across multiple specs under `frontend/tests/e2e/` with shared auth helpers in `frontend/tests/e2e/support/auth.js`.
+- Backend Dockerfile supports `INSTALL_ML_DEPS=true` to include ML packages.
+

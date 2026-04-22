@@ -12,7 +12,8 @@ Backend:
 ```powershell
 Set-Location C:\Users\fas51\Mohammed\market_dashboard
 .\venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements.txt
+pip install -r .\backend\requirements-api.txt
+pip install -r .\backend\requirements-ml.txt  # optional: training/ML workflows
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
