@@ -22,42 +22,42 @@ if str(ROOT) not in sys.path:
 
 class TestRankingEngine:
     def test_import(self):
-        from legacy.engines import ranking_engine
-        assert hasattr(ranking_engine, "_load_best_setup_map")
-        assert hasattr(ranking_engine, "invalidate_best_setup_cache")
+        from core.legacy_adapters import ranking
+        assert hasattr(ranking, "load_best_setup_map")
+        assert hasattr(ranking, "invalidate_best_setup_cache")
 
     def test_load_best_setup_map_returns_dict(self):
-        from legacy.engines.ranking_engine import _load_best_setup_map
-        result = _load_best_setup_map()
+        from core.legacy_adapters.ranking import load_best_setup_map
+        result = load_best_setup_map()
         assert isinstance(result, dict)
 
     def test_invalidate_cache(self):
-        from legacy.engines.ranking_engine import invalidate_best_setup_cache, _load_best_setup_map
+        from core.legacy_adapters.ranking import invalidate_best_setup_cache, load_best_setup_map
         # Should not raise
         invalidate_best_setup_cache()
-        result = _load_best_setup_map()
+        result = load_best_setup_map()
         assert isinstance(result, dict)
 
     def test_safe_float(self):
-        from legacy.engines.ranking_engine import _safe_float
-        assert _safe_float("1.5") == 1.5
-        assert _safe_float(None, 0.0) == 0.0
-        assert _safe_float("bad", 99.0) == 99.0
-        assert _safe_float("", 0.0) == 0.0
+        from core.legacy_adapters.ranking import safe_float
+        assert safe_float("1.5") == 1.5
+        assert safe_float(None, 0.0) == 0.0
+        assert safe_float("bad", 99.0) == 99.0
+        assert safe_float("", 0.0) == 0.0
 
     def test_safe_int(self):
-        from legacy.engines.ranking_engine import _safe_int
-        assert _safe_int("5") == 5
-        assert _safe_int(None, 0) == 0
-        assert _safe_int("bad", 10) == 10
+        from core.legacy_adapters.ranking import safe_int
+        assert safe_int("5") == 5
+        assert safe_int(None, 0) == 0
+        assert safe_int("bad", 10) == 10
 
     def test_signal_bias(self):
-        from legacy.engines.ranking_engine import _signal_bias
-        assert _signal_bias({"enhanced_signal": "BUY"}) == 1
-        assert _signal_bias({"enhanced_signal": "SELL"}) == -1
-        assert _signal_bias({"enhanced_signal": "HOLD"}) == 0
-        assert _signal_bias({"signal": "BUY"}) == 1
-        assert _signal_bias({}) == 0
+        from core.legacy_adapters.ranking import signal_bias
+        assert signal_bias({"enhanced_signal": "BUY"}) == 1
+        assert signal_bias({"enhanced_signal": "SELL"}) == -1
+        assert signal_bias({"enhanced_signal": "HOLD"}) == 0
+        assert signal_bias({"signal": "BUY"}) == 1
+        assert signal_bias({}) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -66,12 +66,12 @@ class TestRankingEngine:
 
 class TestTechnicalEngine:
     def test_import(self):
-        from legacy.engines import technical_engine
-        assert hasattr(technical_engine, "calculate_technical_indicators")
+        from core.legacy_adapters import technical
+        assert hasattr(technical, "calculate_technical_indicators")
 
     def test_calculate_with_minimal_data(self):
         import pandas as pd
-        from legacy.engines.technical_engine import calculate_technical_indicators
+        from core.legacy_adapters.technical import calculate_technical_indicators
 
         # Create minimal OHLCV dataframe in the common yfinance-style format:
         # datetime index with capitalized OHLCV column names.
@@ -96,38 +96,38 @@ class TestTechnicalEngine:
 
 class TestAnalysisEngine:
     def test_import(self):
-        from legacy.engines import analysis_engine
-        assert hasattr(analysis_engine, "_safe_round")
-        assert hasattr(analysis_engine, "_combined_signal")
+        from core.legacy_adapters import analysis
+        assert hasattr(analysis, "safe_round")
+        assert hasattr(analysis, "combined_signal")
 
     def test_safe_round(self):
-        from legacy.engines.analysis_engine import _safe_round
-        assert _safe_round(1.23456, 2) == 1.23
-        assert _safe_round(None) is None
-        assert _safe_round(float("nan")) is None
+        from core.legacy_adapters.analysis import safe_round
+        assert safe_round(1.23456, 2) == 1.23
+        assert safe_round(None) is None
+        assert safe_round(float("nan")) is None
 
     def test_combined_signal(self):
-        from legacy.engines.analysis_engine import _combined_signal
-        assert _combined_signal(5) == "BUY"
-        assert _combined_signal(-5) == "SELL"
-        assert _combined_signal(0) == "HOLD"
-        assert _combined_signal(3) == "BUY"
-        assert _combined_signal(-3) == "SELL"
-        assert _combined_signal(2) == "HOLD"
+        from core.legacy_adapters.analysis import combined_signal
+        assert combined_signal(5) == "BUY"
+        assert combined_signal(-5) == "SELL"
+        assert combined_signal(0) == "HOLD"
+        assert combined_signal(3) == "BUY"
+        assert combined_signal(-3) == "SELL"
+        assert combined_signal(2) == "HOLD"
 
     def test_fallback_news_payload(self):
-        from legacy.engines.analysis_engine import _fallback_news_payload
-        result = _fallback_news_payload("test error")
+        from core.legacy_adapters.analysis import fallback_news_payload
+        result = fallback_news_payload("test error")
         assert result["news_score"] == 0
         assert result["news_sentiment"] == "NEUTRAL"
         assert result["ai_enabled"] is False
         assert "test error" in result["ai_error"]
 
     def test_ml_score_from_result(self):
-        from legacy.engines.analysis_engine import _ml_score_from_result
-        assert _ml_score_from_result(None) == 0
-        assert _ml_score_from_result({"error": "oops"}) == 0
-        assert _ml_score_from_result({}) == 0
+        from core.legacy_adapters.analysis import ml_score_from_result
+        assert ml_score_from_result(None) == 0
+        assert ml_score_from_result({"error": "oops"}) == 0
+        assert ml_score_from_result({}) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +136,6 @@ class TestAnalysisEngine:
 
 class TestBacktestEngine:
     def test_import(self):
-        from legacy.engines import backtest_engine
+        from core.legacy_adapters import backtest
         # Just verify it imports without error
-        assert backtest_engine is not None
+        assert backtest is not None

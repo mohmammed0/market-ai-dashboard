@@ -33,8 +33,8 @@ from backend.app.services.background_jobs import (
 class BackgroundJobsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.auth_enabled_patcher = patch("backend.app.main.AUTH_ENABLED", False)
-        cls.warmup_patcher = patch("backend.app.main._warm_runtime_caches", return_value=None)
+        cls.auth_enabled_patcher = patch("backend.app.api.routes.auth.AUTH_ENABLED", False)
+        cls.warmup_patcher = patch("backend.app.bootstrap.runtime._warm_runtime_caches", return_value=None)
         cls.auth_enabled_patcher.start()
         cls.warmup_patcher.start()
         cls.client_cm = TestClient(app)

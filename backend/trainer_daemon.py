@@ -56,9 +56,9 @@ jobs that the server (46.225.87.252) has queued.
          .venv\\Scripts\\activate
          pip install --pre torch torchvision torchaudio \\
              --index-url https://download.pytorch.org/whl/nightly/cu128
-         pip install -r backend/requirements.txt   # or minimally:
-         pip install fastapi uvicorn sqlalchemy yfinance pandas numpy \\
-             requests python-dotenv pydantic
+         pip install -r backend/requirements-api.txt
+         pip install -r backend/requirements-ml.txt
+
 
   4. Create `trainer_daemon.env` next to this script with:
          MARKET_AI_SERVER_URL=http://<server-tailscale-ip>:8000

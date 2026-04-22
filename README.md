@@ -102,6 +102,45 @@ Modern code reaches legacy logic only through:
 - CORS can be tightened in production with `MARKET_AI_ALLOWED_METHODS` and `MARKET_AI_ALLOWED_HEADERS`.
 - Shared date defaults live in `core/date_defaults.py` and are re-exported for backend usage.
 
+
+## Dependency Installation
+
+Backend API/runtime:
+```bash
+pip install -r backend/requirements-api.txt
+```
+
+ML/training workloads:
+```bash
+pip install -r backend/requirements-ml.txt
+```
+
+Developer tests:
+```bash
+pip install -r backend/requirements-dev.txt
+```
+
+Full backend install:
+```bash
+pip install -r backend/requirements.txt
+```
+
+## CI & Quality Gates
+
+GitHub Actions runs:
+- backend pytest smoke tests
+- frontend build + Playwright E2E suite
+- legacy boundary enforcement (`python scripts/check_legacy_boundary.py`)
+
+## Local Validation
+
+```bash
+python scripts/check_legacy_boundary.py
+python -m pytest backend/tests/test_background_jobs.py backend/tests/test_engines.py
+cd frontend && npm run build
+cd frontend && npm run test:e2e
+```
+
 ## Development Rules
 
 - Preserve broker-managed execution as the single source of execution truth.
