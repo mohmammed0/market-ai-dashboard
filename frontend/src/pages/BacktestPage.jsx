@@ -217,7 +217,7 @@ export default function BacktestPage() {
                 onChange={field.onChange}
                 onSelect={(item) => field.onChange(item.symbol)}
                 placeholder="ابحث عن السهم أو ETF ثم اختره"
-                helperText="نفس تجربة اختيار الرمز المستخدمة في التحليل والاستراتيجية والتداول الورقي."
+                helperText="نفس تجربة اختيار الرمز المستخدمة في التحليل والاستراتيجية ومكتب التداول."
                 error={errors.instrument?.message}
               />
             )}

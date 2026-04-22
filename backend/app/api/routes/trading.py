@@ -2,58 +2,59 @@ from fastapi import APIRouter, Query
 
 from backend.app.api.error_handling import to_http_exception
 from backend.app.api.job_submission import submit_background_job_or_raise
+from backend.app.application.portfolio.service import build_portfolio_snapshot_payload
 from backend.app.application.execution.service import (
-    cancel_paper_order,
-    create_paper_order,
+    cancel_paper_order as cancel_trading_order,
+    create_paper_order as create_trading_order,
     get_alert_history,
-    get_paper_control_panel,
+    get_paper_control_panel as get_trading_control_panel,
     get_internal_portfolio,
     get_signal_history,
     get_trade_history,
-    list_paper_orders,
+    list_paper_orders as list_trading_orders,
 )
-from backend.app.schemas.requests import PaperOrderCreateRequest, PaperSignalRefreshRequest
+from backend.app.schemas.requests import PaperOrderCreateRequest as TradingOrderCreateRequest, PaperSignalRefreshRequest as TradingSignalRefreshRequest
 from backend.app.services.background_jobs import JOB_TYPE_PAPER_REFRESH
-from backend.app.services.job_workflows import run_paper_signal_refresh_workflow
+from backend.app.services.job_workflows import run_paper_signal_refresh_workflow as run_trading_signal_refresh_workflow
 
 
-router = APIRouter(prefix="/paper", tags=["paper"])
+router = APIRouter(prefix="/trading", tags=["trading"])
 
 
 @router.get("/control-panel")
-def paper_control_panel(refresh_broker: bool = Query(default=False)):
-    return get_paper_control_panel(broker_refresh=refresh_broker)
+def trading_control_panel(refresh_broker: bool = Query(default=False)):
+    return get_trading_control_panel(broker_refresh=refresh_broker)
 
 
 @router.get("/portfolio")
-def paper_portfolio():
-    return get_internal_portfolio()
+def trading_portfolio():
+    return build_portfolio_snapshot_payload()
 
 
 @router.get("/trades")
-def paper_trades(limit: int = 100):
+def trading_trades(limit: int = 100):
     return get_trade_history(limit=limit)
 
 
 @router.get("/alerts")
-def paper_alerts(limit: int = 100):
+def trading_alerts(limit: int = 100):
     return get_alert_history(limit=limit)
 
 
 @router.get("/signals")
-def paper_signals(limit: int = 100):
+def trading_signals(limit: int = 100):
     return get_signal_history(limit=limit)
 
 
 @router.get("/orders")
-def paper_orders(limit: int = 100):
-    return list_paper_orders(limit=limit, status=None)
+def trading_orders(limit: int = 100):
+    return list_trading_orders(limit=limit, status=None)
 
 
 @router.post("/orders")
-def paper_order_create(payload: PaperOrderCreateRequest):
+def trading_order_create(payload: TradingOrderCreateRequest):
     try:
-        return create_paper_order(
+        return create_trading_order(
             symbol=payload.symbol,
             side=payload.side,
             quantity=payload.quantity,
@@ -68,18 +69,18 @@ def paper_order_create(payload: PaperOrderCreateRequest):
 
 
 @router.post("/orders/{order_id}/cancel")
-def paper_order_cancel(order_id: str):
+def trading_order_cancel(order_id: str):
     try:
-        return cancel_paper_order(order_id)
+        return cancel_trading_order(order_id)
     except Exception as exc:
         raise to_http_exception(exc, default_status=404) from exc
 
 
 @router.post("/refresh")
-def paper_refresh(payload: PaperSignalRefreshRequest, sync: bool = Query(default=False)):
+def trading_refresh(payload: TradingSignalRefreshRequest, sync: bool = Query(default=False)):
     payload_dict = payload.model_dump()
     if sync:
-        return run_paper_signal_refresh_workflow(payload_dict)
+        return run_trading_signal_refresh_workflow(payload_dict)
     return submit_background_job_or_raise(
         job_type=JOB_TYPE_PAPER_REFRESH,
         payload=payload_dict,

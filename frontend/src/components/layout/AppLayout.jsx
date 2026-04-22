@@ -44,10 +44,10 @@ const NAV_ITEMS = [
     ),
   },
   {
-    path: "/paper-trading",
-    label: "التداول التجريبي",
+    path: "/trading",
+    label: "مكتب التداول",
     section: "الرئيسية",
-    hint: "المحفظة، الأوامر، والصفقات",
+    hint: "المحفظة، الأوامر، والصفقات عبر الوسيط",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 6h18" />
@@ -346,7 +346,7 @@ const NAV_ITEMS = [
 ];
 
 const NAV_SECTIONS = [
-  { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/paper-trading", "/ai-news"] },
+  { label: "الرئيسية", paths: ["/", "/ai-market", "/live-market", "/trading", "/ai-news"] },
   { label: "التحليل", paths: ["/ranking", "/knowledge"] },
   { label: "التنفيذ", paths: ["/broker", "/diagnostics/auto-trading"] },
   { label: "المنصة", paths: ["/brain", "/settings"] },

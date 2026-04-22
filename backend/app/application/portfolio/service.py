@@ -35,9 +35,9 @@ _BROKER_TERMINAL_ORDER_STATUSES = {
 }
 
 _PORTFOLIO_SOURCE_LABELS = {
-    "broker_paper": ("broker", "Broker Paper"),
+    "broker_paper": ("broker", "Broker Account"),
     "broker_live": ("broker", "Broker Live"),
-    "internal_paper": ("internal", "Deprecated Internal Snapshot"),
+    "internal_paper": ("internal", "Legacy Snapshot"),
 }
 
 

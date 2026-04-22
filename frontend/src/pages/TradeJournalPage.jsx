@@ -116,13 +116,13 @@ export default function TradeJournalPage() {
   return (
     <PageFrame
       title="Trade Journal"
-      description="Capture thesis, risk plan, process quality, and post-trade reviews tied to the current paper-trading workflow."
+      description="Capture thesis, risk plan, process quality, and post-trade reviews tied to the current trading workflow."
       eyebrow="Journal + Feedback"
       headerActions={<StatusBadge label="Review Loop" tone="accent" />}
     >
       <FilterBar
         title="Journal Entry"
-        description="Add structured process notes so paper-trading results can feed future evaluation and model reviews."
+        description="Add structured process notes so trading results can feed future evaluation and model reviews."
         action={<StatusBadge label={submitting ? "Saving" : "Journal Ready"} tone={submitting ? "warning" : "subtle"} />}
       >
         <form className="analyze-form filter-form" onSubmit={handleSubmit(onSubmit)}>

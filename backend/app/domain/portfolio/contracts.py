@@ -135,4 +135,4 @@ class PortfolioSnapshotPayload(BaseModel):
 class PortfolioSnapshotV1(PortfolioSnapshotPayload):
     contract_version: Literal["v1"] = "v1"
     source_type: Literal["broker", "internal"] = "internal"
-    source_label: str = "Internal Simulated Paper"
+    source_label: str = "Legacy Snapshot"

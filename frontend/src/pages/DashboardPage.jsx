@@ -161,7 +161,7 @@ function OpportunityRow({ item, onNavigate }) {
   const riskLabel = item?.risk_label || "RANGE";
   const reason = item?.reason || item?.best_setup || item?.setup_type || item?.notes || "فرصة مرتبة من محرك القرار.";
   return (
-    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
       <div className="dashboard-list-copy">
         <strong>{item?.symbol || "—"}</strong>
         <p>{reason}</p>
@@ -177,7 +177,7 @@ function OpportunityRow({ item, onNavigate }) {
 function PositionRow({ item, onNavigate }) {
   const pnl = Number(item?.unrealized_pnl ?? 0);
   return (
-    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/paper-trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
+    <button className="dashboard-list-item dashboard-list-item--interactive" type="button" onClick={() => onNavigate(`/trading?symbol=${encodeURIComponent(item?.symbol || "")}`)}>
       <div className="dashboard-list-copy">
         <strong>{item?.symbol || "—"}</strong>
         <p>{`${item?.side || "LONG"} · ${item?.quantity || 0} أسهم`}</p>
@@ -222,10 +222,10 @@ export default function DashboardPage() {
   const pipelineStats = pipelineLive?.stats || {};
 
   const usingBrokerData = String(portfolioSnapshot?.active_source || "").startsWith("broker");
-  const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Paper" : "Internal Simulated Paper");
+  const sourceLabel = portfolioSnapshot?.source_label || (usingBrokerData ? "Broker Account" : "Local Snapshot");
   const sourceDescription = usingBrokerData
-    ? "يتم الآن عرض الرصيد والمراكز من حساب الوسيط الورقي المتصل مع بقاء الإشارات صادرة من محرك التحليل الداخلي."
-    : "اللوحة الحالية تعتمد على المحاكاة الداخلية بالكامل، من دون مزجها بحساب وسيط خارجي.";
+    ? "يتم الآن عرض الرصيد والمراكز من حساب الوسيط المتصل مع بقاء الإشارات صادرة من محرك التحليل الداخلي."
+    : "اللوحة الحالية تعتمد على بيانات التحليل المحلية من دون تنفيذ محلي منفصل.";
 
   const totalEquity = summary?.total_equity ?? summary?.portfolio_value ?? Number(summary?.cash_balance ?? 0) + Number(summary?.total_market_value ?? 0);
   const aiReady = ai?.effective_status || ai?.status || "checking";
@@ -445,15 +445,15 @@ export default function DashboardPage() {
               <div className="dashboard-subsection">
                 <div className="dashboard-subsection-head">
                   <strong>المراكز الحالية</strong>
-                  <button className="secondary-button" type="button" onClick={() => navigate("/paper-trading")}>
-                    افتح التداول الورقي
+                  <button className="secondary-button" type="button" onClick={() => navigate("/trading")}>
+                    افتح مكتب التداول
                   </button>
                 </div>
                 <div className="dashboard-list">
                   {positions.length ? (
                     positions.slice(0, 4).map((item, index) => <PositionRow key={`${item.symbol || "position"}-${index}`} item={item} onNavigate={navigate} />)
                   ) : (
-                    <EmptyState title="لا توجد مراكز مفتوحة" description="سيتحدث هذا القسم تلقائيًا عند وجود مراكز أو ربط حساب ورقي." />
+                    <EmptyState title="لا توجد مراكز مفتوحة" description="سيتحدث هذا القسم تلقائيًا عند وجود مراكز أو ربط حساب الوسيط." />
                   )}
                 </div>
               </div>

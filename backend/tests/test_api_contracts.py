@@ -77,7 +77,7 @@ class ApiContractsTests(unittest.TestCase):
             generated_at=datetime.now(UTC),
             active_source="internal_paper",
             source_type="internal",
-            source_label="Internal Simulated Paper",
+            source_label="Legacy Snapshot",
             broker_connected=False,
             summary=PortfolioViewSummary(
                 active_source="internal_paper",
@@ -121,7 +121,7 @@ class ApiContractsTests(unittest.TestCase):
         self.assertEqual(data["contract_version"], "v1")
         self.assertEqual(data["active_source"], "internal_paper")
         self.assertEqual(data["source_type"], "internal")
-        self.assertEqual(data["source_label"], "Internal Simulated Paper")
+        self.assertEqual(data["source_label"], "Legacy Snapshot")
         self.assertIn("summary", data)
         self.assertIn("positions", data)
         self.assertIn("orders", data)
@@ -309,7 +309,7 @@ class ApiContractsTests(unittest.TestCase):
 
         self.assertEqual(payload.active_source, "internal_paper")
         self.assertEqual(payload.source_type, "internal")
-        self.assertEqual(payload.source_label, "Internal Simulated Paper")
+        self.assertEqual(payload.source_label, "Legacy Snapshot")
         self.assertTrue(payload.broker_connected)
 
     def test_portfolio_snapshot_keeps_clean_broker_when_internal_has_only_history(self):
@@ -359,7 +359,7 @@ class ApiContractsTests(unittest.TestCase):
 
         self.assertEqual(payload.active_source, "broker_paper")
         self.assertEqual(payload.source_type, "broker")
-        self.assertEqual(payload.source_label, "Broker Paper")
+        self.assertEqual(payload.source_label, "Broker Account")
         self.assertTrue(payload.broker_connected)
         sync_mock.assert_not_called()
 
@@ -511,7 +511,7 @@ class ApiContractsTests(unittest.TestCase):
 
         self.assertEqual(payload.active_source, "broker_paper")
         self.assertEqual(payload.source_type, "broker")
-        self.assertEqual(payload.source_label, "Broker Paper")
+        self.assertEqual(payload.source_label, "Broker Account")
         self.assertTrue(payload.broker_connected)
 
 

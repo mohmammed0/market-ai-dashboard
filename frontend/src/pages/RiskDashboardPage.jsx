@@ -77,7 +77,7 @@ export default function RiskDashboardPage() {
   return (
     <PageFrame
       title="لوحة المخاطر"
-      description="تحجيم المراكز، ضوابط الخسارة اليومية، وتنبيهات المحفظة المبنية على المحفظة الورقية الحالية."
+      description="تحجيم المراكز، ضوابط الخسارة اليومية، وتنبيهات المحفظة المبنية على محفظة الوسيط الحالية."
       eyebrow="ذكاء المخاطر"
       headerActions={<StatusBadge label="محمي" tone="positive" dot />}
     >

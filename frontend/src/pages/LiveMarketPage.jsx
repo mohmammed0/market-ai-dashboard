@@ -295,7 +295,7 @@ export default function LiveMarketPage() {
   const headerActions = useMemo(
     () => (
       <>
-        <ActionButton to={`/paper-trading?symbol=${encodeURIComponent(selectedSymbol)}`} variant="secondary">تنفيذ ورقي</ActionButton>
+        <ActionButton to={`/trading?symbol=${encodeURIComponent(selectedSymbol)}`} variant="secondary">مكتب التداول</ActionButton>
         <StatusBadge label={session?.label || "السوق"} tone={sessionTone(session?.label)} />
       </>
     ),
@@ -340,7 +340,7 @@ export default function LiveMarketPage() {
   return (
     <PageFrame
       title="طرفية السوق"
-      description="بيئة سوق عربية أولاً تتمحور حول الشارت والرمز والقوائم المتزامنة، مع انتقال سريع من الاكتشاف إلى القرار والتنفيذ الورقي."
+      description="بيئة سوق عربية أولاً تتمحور حول الشارت والرمز والقوائم المتزامنة، مع انتقال سريع من الاكتشاف إلى القرار والتنفيذ عبر الوسيط."
       eyebrow="سير عمل السوق"
       headerActions={headerActions}
     >

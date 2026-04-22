@@ -45,7 +45,7 @@ export default function WatchlistDock({
     <div className="panel result-panel watchlist-dock">
       <SectionHeader
         title="مساحة القوائم"
-        description="قوائم خادم متزامنة للمتابعة اليومية، مع تثبيت الرمز النشط وإرساله مباشرة إلى الشارت أو التنفيذ الورقي."
+        description="قوائم خادم متزامنة للمتابعة اليومية، مع تثبيت الرمز النشط وإرساله مباشرة إلى الشارت أو مكتب التداول."
         badge={activeWatchlist?.name || "قوائم"}
         action={<StatusBadge label={pending ? "جارٍ الحفظ" : "متزامنة"} tone={pending ? "warning" : "accent"} />}
       />
@@ -93,7 +93,7 @@ export default function WatchlistDock({
           >
               <button className="watchlist-item-button" type="button" onClick={() => fireAndForget(() => onSelectSymbol?.(item.symbol))}>
                 <strong>{item.symbol}</strong>
-                <span>{item.notes || "انتقال سريع إلى الشارت والتحليل والتنفيذ الورقي"}</span>
+                <span>{item.notes || "انتقال سريع إلى الشارت والتحليل ومكتب التداول"}</span>
               </button>
               {!activeWatchlist.is_system ? (
                 <button

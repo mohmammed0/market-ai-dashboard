@@ -72,8 +72,8 @@ function LiveMarketExplorerTable({
               <Link className="inline-link inline-link-chip" to={`/analyze?symbol=${encodeURIComponent(symbol)}`}>
                 تحليل
               </Link>
-              <Link className="inline-link inline-link-chip" to={`/paper-trading?symbol=${encodeURIComponent(symbol)}`}>
-                ورقي
+              <Link className="inline-link inline-link-chip" to={`/trading?symbol=${encodeURIComponent(symbol)}`}>
+                تداول
               </Link>
             </div>
           );
@@ -86,7 +86,7 @@ function LiveMarketExplorerTable({
   return (
     <SectionCard
       title="جدول السوق"
-      description="جدول موحد للكون الأمريكي مع انتقال مباشر إلى التحليل والتداول الورقي وإدارة المفضلة من نفس المكان."
+      description="جدول موحد للكون الأمريكي مع انتقال مباشر إلى التحليل ومكتب التداول وإدارة المفضلة من نفس المكان."
       badge={explorerCount ? `${explorerCount} صف` : "Explorer"}
     >
       {bootLoading ? (

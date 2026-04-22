@@ -90,7 +90,7 @@ export default function PortfolioExposurePage() {
       {sectorOption ? (
         <ChartCard
           title="Sector Exposure"
-          description="Portfolio weight by sector from the paper-trading book."
+          description="Portfolio weight by sector from the connected trading book."
           option={sectorOption}
         />
       ) : null}
@@ -104,7 +104,7 @@ export default function PortfolioExposurePage() {
             columns={positionsColumns}
             data={data?.positions || []}
             emptyTitle="No open positions"
-            emptyDescription="Run the paper-trading workflow to create positions and exposure data."
+            emptyDescription="Run the trading workflow to create positions and exposure data."
           />
         )}
       </div>

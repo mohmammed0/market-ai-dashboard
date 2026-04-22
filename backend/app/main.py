@@ -47,7 +47,7 @@ from backend.app.api.routes import (
     notifications_router,
     operations_router,
     optimizer_router,
-    paper_router,
+    trading_router,
     portfolio_risk_router,
     portfolio_router,
     position_sizing_router,
@@ -346,7 +346,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(models_promotion_router, prefix="/api")
     app.include_router(optimizer_router, prefix="/api")
     app.include_router(operations_router, prefix="/api")
-    app.include_router(paper_router, prefix="/api")
+    app.include_router(trading_router, prefix="/api")
     app.include_router(portfolio_router, prefix="/api")
     app.include_router(risk_router, prefix="/api")
     app.include_router(live_router, prefix="/api")

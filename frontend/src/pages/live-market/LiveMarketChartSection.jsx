@@ -147,8 +147,8 @@ function LiveMarketChartSection({
           <Link className="inline-link inline-link-strong" to={`/strategy-lab?symbol=${encodeURIComponent(selectedSymbol)}`}>
             فتح الاستراتيجية
           </Link>
-          <Link className="inline-link inline-link-strong" to={`/paper-trading?symbol=${encodeURIComponent(selectedSymbol)}`}>
-            تنفيذ ورقي
+          <Link className="inline-link inline-link-strong" to={`/trading?symbol=${encodeURIComponent(selectedSymbol)}`}>
+            مكتب التداول
           </Link>
         </div>
       )}

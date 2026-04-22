@@ -1411,7 +1411,7 @@ def _apply_trade_intent(
         platform_repo.append_order_intent(
             order_intent_id=order_intent_id,
             signal_id=signal_id,
-            broker="simulated",
+            broker="alpaca",
             symbol=intent.symbol,
             side=fill_side,
             qty=approved_qty,
@@ -2362,17 +2362,17 @@ def create_paper_order(
     trace_context = build_trace_context(trace_id)
     trace_id = trace_context["correlation_id"]
     if normalized_side not in {"BUY", "SELL"}:
-        raise ValueError("Paper order side must be BUY or SELL.")
+        raise ValueError("Order side must be BUY or SELL.")
     if normalized_order_type not in {"market", "limit"}:
-        raise ValueError("Paper order type must be market or limit.")
+        raise ValueError("Order type must be market or limit.")
     if float(quantity or 0.0) <= 0:
-        raise ValueError("Paper order quantity must be greater than zero.")
+        raise ValueError("Order quantity must be greater than zero.")
     if normalized_order_type == "limit" and limit_price in (None, 0):
         raise ValueError("Limit orders require a limit_price.")
 
     # --- kill switch ---------------------------------------------------------
     if is_halted():
-        correlation_id = f"paper-order-{uuid4().hex[:12]}"
+        correlation_id = f"broker-order-{uuid4().hex[:12]}"
         with session_scope() as session:
             repo = ExecutionRepository(session)
             repo.append_audit_event(ExecutionEventRecord(

@@ -136,14 +136,14 @@ export default function BrokerPage() {
   return (
     <PageFrame
       title="Broker Foundation"
-      description="Read-only broker status and account state, kept separate from the internal simulator so paper trading stays safe and explicit."
+      description="Broker-managed account and execution state from the connected broker environment."
       eyebrow="Broker Integration"
       headerActions={<StatusBadge label={brokerLabel} tone={brokerTone} />}
     >
       <div className="panel result-panel">
         <SectionHeader
           title="Broker Connection"
-          description="Alpaca-ready account visibility with live execution still disabled by default."
+          description="Broker connectivity, account state, and execution readiness from the connected environment."
           badge={summary?.connected ? <StatusBadge label="Connected" tone="accent" /> : <StatusBadge label="Read Only" tone="warning" />}
         />
         <ErrorBanner message={error} />
@@ -166,8 +166,7 @@ export default function BrokerPage() {
             <div className="status-message">
               <strong>{summary.detail || "Broker integration status unavailable."}</strong>
               <span>
-                يبقى التداول التجريبي داخل المحاكي هو مسار التنفيذ الافتراضي. أما التداول التجريبي عبر الوسيط وأي تنفيذ حي مستقبلي
-                فهما معزولان خلف إعدادات صريحة.
+                المسار التشغيلي الحالي broker-managed بالكامل. لا يوجد محرك تداول ورقي داخلي نشط، وأي تنفيذ يتم عبر إعدادات الوسيط المتصل.
               </span>
               <span>
                 {summary.trading_mode === "margin"
@@ -215,7 +214,7 @@ export default function BrokerPage() {
         ) : (
           <div className="empty-state compact-empty">
             <strong>{t("No broker account connected")}</strong>
-            <p>احفظ بيانات Alpaca من صفحة الإعدادات ثم اختبر الاتصال هناك. يبقى التداول التجريبي الداخلي متاحاً حتى لو كان اتصال الوسيط غير مهيأ.</p>
+            <p>احفظ بيانات Alpaca من صفحة الإعدادات ثم اختبر الاتصال هناك. هذا السطح يعرض حالة التنفيذ عبر الوسيط فقط.</p>
           </div>
         )}
       </div>
@@ -263,13 +262,13 @@ export default function BrokerPage() {
             columns={positionsColumns}
             data={summary?.positions || []}
             emptyTitle="No broker positions"
-            emptyDescription="Broker paper positions appear here once a provider is configured and has open holdings."
+            emptyDescription="Broker positions appear here once a provider is configured and has open holdings."
           />
         )}
       </div>
 
       <div className="panel result-panel">
-        <SectionHeader title="Recent Broker Orders" description="Read-only order history for broker paper accounts. No live order path is enabled in this pass." />
+        <SectionHeader title="Recent Broker Orders" description="Broker-managed order history from the connected account." />
         {loading ? (
           <LoadingSkeleton lines={6} />
         ) : (
@@ -277,7 +276,7 @@ export default function BrokerPage() {
             columns={ordersColumns}
             data={summary?.orders || []}
             emptyTitle="No broker orders"
-            emptyDescription="Recent broker paper orders appear here when the provider has order history available."
+            emptyDescription="Recent broker orders appear here when the provider has order history available."
           />
         )}
       </div>

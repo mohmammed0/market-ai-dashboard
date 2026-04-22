@@ -173,7 +173,7 @@ def _empty_portfolio_snapshot(detail: str = "Portfolio snapshot unavailable.") -
         generated_at=generated_at,
         active_source="broker_paper",
         source_type="broker",
-        source_label="Broker Paper",
+        source_label="Broker Account",
         broker_connected=False,
         summary=PortfolioViewSummary(active_source="broker_paper", provider="broker", connected=False, mode="paper"),
         positions=[],

@@ -82,7 +82,7 @@ test.beforeEach(async ({ page, request }) => {
 test("Dashboard renders current source and topbar AI status", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("لوحة القيادة").first()).toBeVisible();
-  await expect(page.getByText(/Broker Paper|Internal Simulated Paper/).first()).toBeVisible();
+  await expect(page.getByText(/Broker Account|Legacy Snapshot/).first()).toBeVisible();
   await expect(page.getByText("حالة النظام").first()).toBeVisible();
   await expect(page.getByTestId("topbar-ai-status")).toBeVisible();
 });
@@ -101,7 +101,7 @@ test("Live market page loads current terminal shell", async ({ page }) => {
   await expect(page.getByText("سير عمل السوق").first()).toBeVisible();
 });
 
-test("Portfolio snapshot contract is available and paper trading page renders", async ({ page, request }) => {
+test("Portfolio snapshot contract is available and trading desk page renders", async ({ page, request }) => {
   const authSession = await resolveAuthSession(request);
   const response = await page.request.get(`${API_BASE_URL}/api/portfolio/snapshot`, { headers: authSession.headers });
   expect(response.ok()).toBeTruthy();
@@ -110,8 +110,8 @@ test("Portfolio snapshot contract is available and paper trading page renders", 
   expect(typeof payload.source_label).toBe("string");
   expect(payload.summary).toBeTruthy();
 
-  await page.goto("/paper-trading");
-  await expect(page.getByText("التداول الورقي").first()).toBeVisible();
+  await page.goto("/trading");
+  await expect(page.getByText("مكتب التداول").first()).toBeVisible();
   await expect(page.getByText("المراكز المفتوحة").first()).toBeVisible();
 });
 

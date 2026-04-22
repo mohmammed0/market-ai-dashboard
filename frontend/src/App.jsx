@@ -11,7 +11,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const AINewsPage = lazy(() => import("./pages/AINewsPage"));
 const LiveMarketPage = lazy(() => import("./pages/LiveMarketPage"));
-const PaperTradingPage = lazy(() => import("./pages/PaperTradingPage"));
+const TradingDeskPage = lazy(() => import("./pages/TradingDeskPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const BrokerPage = lazy(() => import("./pages/BrokerPage"));
 const AIMarketPage = lazy(() => import("./pages/AIMarketPage"));
@@ -83,7 +83,8 @@ export default function App() {
                           <Route path="/" element={<DashboardPage />} />
                           <Route path="/ai-news" element={<AINewsPage />} />
                           <Route path="/live-market" element={<LiveMarketPage />} />
-                          <Route path="/paper-trading" element={<PaperTradingPage />} />
+                          <Route path="/trading" element={<TradingDeskPage />} />
+                          <Route path="/paper-trading" element={<Navigate to="/trading" replace />} />
                           <Route path="/settings" element={<SettingsPage />} />
                           <Route path="/analyze" element={<Navigate to="/ai-market" replace />} />
                           <Route path="/ranking" element={<RankingPage />} />
@@ -97,8 +98,8 @@ export default function App() {
                           <Route path="/backtest" element={<Navigate to="/ranking" replace />} />
                           <Route path="/strategy-lab" element={<Navigate to="/ranking" replace />} />
                           <Route path="/model-lab" element={<Navigate to="/settings" replace />} />
-                          <Route path="/alerts-center" element={<Navigate to="/paper-trading" replace />} />
-                          <Route path="/trade-journal" element={<Navigate to="/paper-trading" replace />} />
+                          <Route path="/alerts-center" element={<Navigate to="/trading" replace />} />
+                          <Route path="/trade-journal" element={<Navigate to="/trading" replace />} />
                           <Route path="/diagnostics/auto-trading" element={<AutoTradingDiagnosticsPage />} />
                           <Route path="/automation" element={<Navigate to="/settings" replace />} />
                           <Route path="/operations" element={<Navigate to="/settings" replace />} />

@@ -34,7 +34,7 @@ from .model_lifecycle import router as model_lifecycle_router
 from .models_promotion import router as models_promotion_router
 from .optimizer import router as optimizer_router
 from .operations import router as operations_router
-from .paper import router as paper_router
+from .trading import router as trading_router
 from .portfolio import router as portfolio_router
 from .ranking import router as ranking_router
 from .risk import router as risk_router
@@ -87,7 +87,7 @@ __all__ = [
     "models_promotion_router",
     "optimizer_router",
     "operations_router",
-    "paper_router",
+    "trading_router",
     "portfolio_router",
     "ranking_router",
     "risk_router",

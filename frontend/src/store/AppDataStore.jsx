@@ -28,7 +28,7 @@ export function AppDataProvider({ children }) {
     const sections = [
       { key: "dashboardLite",   url: "/api/dashboard/lite",            interval: 45000, cacheTtlMs: 5000 },
       { key: "portfolioSnapshot", url: "/api/portfolio/snapshot",      interval: 30000, cacheTtlMs: 5000 },
-      { key: "paperSignals",    url: "/api/paper/signals",             interval: 45000, cacheTtlMs: 5000 },
+      { key: "tradingSignals",  url: "/api/trading/signals",           interval: 45000, cacheTtlMs: 5000 },
       { key: "aiStatus",        url: "/api/ai/status",                 interval: 120000, cacheTtlMs: 15000 },
       { key: "pipelineLive",    url: "/api/live/pipeline?limit_events=50&limit_cycles=10", interval: 5000, cacheTtlMs: 0 },
     ];

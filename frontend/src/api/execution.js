@@ -43,28 +43,28 @@ export async function saveJournalEntry(payload) {
   return postJson("/api/journal/entries", payload);
 }
 
-export async function fetchPaperPortfolio() {
-  return getJson("/api/paper/portfolio");
+export async function fetchTradingPortfolio() {
+  return getJson("/api/trading/portfolio");
 }
 
-export async function fetchPaperControlPanel(refreshBroker = false) {
-  return getJson(`/api/paper/control-panel${refreshBroker ? "?refresh_broker=true" : ""}`);
+export async function fetchTradingControlPanel(refreshBroker = false) {
+  return getJson(`/api/trading/control-panel${refreshBroker ? "?refresh_broker=true" : ""}`);
 }
 
-export async function fetchPaperTrades() {
-  return getJson("/api/paper/trades");
+export async function fetchTradingTrades() {
+  return getJson("/api/trading/trades");
 }
 
 export async function fetchAlertHistory() {
-  return getJson("/api/paper/alerts");
+  return getJson("/api/trading/alerts");
 }
 
 export async function fetchSignalHistory() {
-  return getJson("/api/paper/signals");
+  return getJson("/api/trading/signals");
 }
 
-export async function refreshPaperSignals(payload) {
-  return postJson("/api/paper/refresh", payload);
+export async function refreshTradingSignals(payload) {
+  return postJson("/api/trading/refresh", payload);
 }
 
 export async function fetchExecutionAudit(params = {}) {
@@ -85,18 +85,18 @@ export async function runExecutionReconcile(payload = {}) {
   return postJson("/api/execution/reconcile", payload);
 }
 
-export async function fetchPaperOrders(status = "OPEN") {
+export async function fetchTradingOrders(status = "OPEN") {
   const query = new URLSearchParams();
   if (status) query.set("status", status);
-  return getJson(`/api/paper/orders${query.size ? `?${query.toString()}` : ""}`);
+  return getJson(`/api/trading/orders${query.size ? `?${query.toString()}` : ""}`);
 }
 
-export async function createPaperOrder(payload) {
-  return postJson("/api/paper/orders", payload);
+export async function createTradingOrder(payload) {
+  return postJson("/api/trading/orders", payload);
 }
 
-export async function cancelPaperOrder(orderId) {
-  return postJson(`/api/paper/orders/${encodeURIComponent(orderId)}/cancel`, {});
+export async function cancelTradingOrder(orderId) {
+  return postJson(`/api/trading/orders/${encodeURIComponent(orderId)}/cancel`, {});
 }
 
 export async function fetchExecutionPreview(payload) {
@@ -118,3 +118,12 @@ export async function runOrchestrationReconcile() {
 export async function fetchStrategyLabTracking() {
   return getJson("/api/strategy-lab/tracking");
 }
+
+
+export const fetchPaperPortfolio = fetchTradingPortfolio;
+export const fetchPaperControlPanel = fetchTradingControlPanel;
+export const fetchPaperTrades = fetchTradingTrades;
+export const refreshPaperSignals = refreshTradingSignals;
+export const fetchPaperOrders = fetchTradingOrders;
+export const createPaperOrder = createTradingOrder;
+export const cancelPaperOrder = cancelTradingOrder;
