@@ -1,7 +1,7 @@
 import os
 import json
 import sys
-import news_engine
+from legacy.engines import news_engine
 
 # ---------------------------------------------------------------------------
 # ai_news_engine.py  --  local-model backed news analysis

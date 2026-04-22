@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from technical_engine import calculate_technical_indicators
+from core.legacy_adapters.technical import calculate_technical_indicators
 
 from backend.app.services.market_data import _load_local_csv
 

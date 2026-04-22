@@ -281,7 +281,7 @@ def _analyze_symbol(symbol: str) -> dict | None:
         pass
 
     try:
-        from analysis_engine import analyze_stock
+        from core.legacy_adapters.analysis import analyze_stock
         return analyze_stock(symbol)
     except Exception as exc:
         logger.debug("Analysis failed for %s: %s", symbol, exc)

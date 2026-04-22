@@ -189,7 +189,7 @@ def compute_grade(
         "grade_label": "Development fallback mode — functional but not commercially trustworthy",
         "upgrade_hint": (
             "Start live services (docker compose -f docker-compose.services.yml up -d), "
-            "switch to PostgreSQL, and activate .env.local-live"
+            "switch to PostgreSQL, and activate .env.local-live.example"
         ),
     }
 

@@ -1,4 +1,4 @@
-from technical_engine import calculate_technical_indicators
+from core.legacy_adapters.technical import calculate_technical_indicators
 
 
 def calculate_indicators(df):

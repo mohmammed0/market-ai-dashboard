@@ -1,8 +1,8 @@
 
 import pandas as pd
 
-from leaders_universe import LEADERS_SYMBOLS
-from backtest_optimizer_light import optimize_symbol_light
+from legacy.support.leaders_universe import LEADERS_SYMBOLS
+from legacy.scripts.backtest_optimizer_light import optimize_symbol_light
 
 
 def run_batch_optimizer():

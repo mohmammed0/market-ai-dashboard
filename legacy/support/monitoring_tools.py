@@ -1,7 +1,7 @@
 from pathlib import Path
 from sqlalchemy import select, func, desc
-from db import DATABASE_URL, SessionLocal
-from models import AnalysisRun, LiveQuote, NewsRecord
+from legacy.support.db import DATABASE_URL, SessionLocal
+from legacy.support.models import AnalysisRun, LiveQuote, NewsRecord
 from core.runtime_paths import sqlite_file_path
 
 LOG_FILE = Path("logs") / "market_ai.log"

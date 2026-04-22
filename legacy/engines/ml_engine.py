@@ -1,5 +1,5 @@
 from backend.app.services.ml_lab import infer_latest as infer_ml_run_latest
-from app_logger import get_logger
+from legacy.support.app_logger import get_logger
 
 
 logger = get_logger("ml_engine")

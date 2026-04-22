@@ -101,8 +101,8 @@ if _prepare_auth_header >/dev/null 2>&1; then
   curl -fsS "${AUTH_HEADER[@]}" "$BACKEND_URL/api/jobs"
   echo
   echo
-  echo "GET $BACKEND_URL/api/paper/portfolio (authenticated)"
-  curl -fsS "${AUTH_HEADER[@]}" "$BACKEND_URL/api/paper/portfolio"
+  echo "GET $BACKEND_URL/api/trading/portfolio (authenticated)"
+  curl -fsS "${AUTH_HEADER[@]}" "$BACKEND_URL/api/trading/portfolio"
   echo
   echo
   echo "GET $BACKEND_URL/api/automation/status (authenticated)"

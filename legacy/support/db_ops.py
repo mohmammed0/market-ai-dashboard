@@ -1,5 +1,5 @@
-from db import SessionLocal
-from models import AnalysisRun, LiveQuote, NewsRecord
+from legacy.support.db import SessionLocal
+from legacy.support.models import AnalysisRun, LiveQuote, NewsRecord
 
 
 def _to_float(value):

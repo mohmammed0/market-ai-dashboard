@@ -2,7 +2,7 @@
 import pandas as pd
 from itertools import product
 
-from backtest_engine import backtest_symbol_enhanced
+from legacy.engines.backtest_engine import backtest_symbol_enhanced
 
 
 def optimize_symbol_light(

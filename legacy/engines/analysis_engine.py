@@ -1,12 +1,12 @@
 import pandas as pd
 
-from technical_engine import calculate_technical_indicators
-from ai_news_engine import fetch_ai_news
-from app_logger import get_logger
+from legacy.engines.technical_engine import calculate_technical_indicators
+from legacy.engines.ai_news_engine import fetch_ai_news
+from legacy.support.app_logger import get_logger
 from core.source_data import load_symbol_source_data
 
 try:
-    from ml_engine import predict_latest as predict_ml_latest
+    from legacy.engines.ml_engine import predict_latest as predict_ml_latest
 except Exception:
     predict_ml_latest = None
 

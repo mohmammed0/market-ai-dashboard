@@ -16,7 +16,7 @@ try:
 except Exception:
     yf = None
 
-from app_logger import get_logger
+from legacy.support.app_logger import get_logger
 
 logger = get_logger("live_market_engine")
 

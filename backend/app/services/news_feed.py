@@ -10,8 +10,8 @@ from backend.app.core.logging_utils import get_logger, log_event
 from backend.app.models.market import NewsRecord
 from backend.app.services.pipeline_live import complete_cycle, log_cycle_stage, start_cycle
 from backend.app.services.storage import session_scope
-from news_intelligence import classify_news_item, headline_signature
-from news_engine import fetch_news
+from core.legacy_adapters.news import classify_news_item, headline_signature
+from core.legacy_adapters.news import fetch_news
 
 
 logger = get_logger(__name__)

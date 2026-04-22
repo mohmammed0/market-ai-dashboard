@@ -2414,7 +2414,7 @@ def create_paper_order(
     order_payload.update(
         {
             "strategy_mode": strategy_mode,
-            "notes": notes or f"Broker-managed submission routed through the deprecated internal paper endpoint.",
+            "notes": notes or f"Broker-managed submission routed through the deprecated trading compatibility endpoint.",
             "deprecated_internal_paper_route": True,
             "paper_route_disabled": True,
             "broker_managed_only": True,

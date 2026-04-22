@@ -12,7 +12,7 @@ from backend.app.services.explainability import build_signal_explanation
 from backend.app.services.market_universe import resolve_universe_preset
 from backend.app.services.runtime_settings import get_auto_trading_config
 from core.analysis_service import analyze_symbol
-from news_engine import fetch_news
+from core.legacy_adapters.news import fetch_news
 
 
 class DummyResponse:

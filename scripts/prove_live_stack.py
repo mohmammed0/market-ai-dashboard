@@ -8,7 +8,7 @@ functional from the application code. Run after starting services via:
 Usage:
     .\\venv\\Scripts\\python.exe scripts\\prove_live_stack.py
 
-Expects .env.local-live values to be active (either copied to .env or
+Expects .env.local-live.example values to be active (either copied to .env or
 set in the environment).
 """
 

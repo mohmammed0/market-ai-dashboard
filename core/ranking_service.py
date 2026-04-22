@@ -1,4 +1,4 @@
-from ranking_engine import (
+from core.legacy_adapters.ranking import (
     rank_analysis_result,
     build_ranked_scan_rows,
     summarize_top_candidates_by_signal,

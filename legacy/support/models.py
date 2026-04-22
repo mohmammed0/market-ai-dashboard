@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Boolean
 from datetime import datetime
-from db import Base
+from legacy.support.db import Base
 
 
 class AnalysisRun(Base):

@@ -1,16 +1,15 @@
-from core.legacy_adapters.backtest import (
+from legacy.engines.backtest_engine import (
+    _load_source_data,
     backtest_symbol,
     backtest_symbol_enhanced,
     save_backtest_events_csv,
     save_enhanced_backtest_events_csv,
 )
-from core.vectorbt_service import run_vectorbt_backtest
-
 
 __all__ = [
+    "_load_source_data",
     "backtest_symbol",
     "backtest_symbol_enhanced",
-    "run_vectorbt_backtest",
     "save_backtest_events_csv",
     "save_enhanced_backtest_events_csv",
 ]

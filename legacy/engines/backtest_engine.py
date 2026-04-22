@@ -1,8 +1,8 @@
 
 import pandas as pd
 
-from technical_engine import calculate_technical_indicators
-from analysis_engine import (
+from legacy.engines.technical_engine import calculate_technical_indicators
+from legacy.engines.analysis_engine import (
     _build_timeframe_snapshot,
     _mtf_score_from_map,
     _build_relative_strength_snapshot,

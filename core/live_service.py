@@ -23,7 +23,7 @@ class DisabledLiveEngine:
 
 def create_live_engine():
     try:
-        from live_market_engine import LiveMarketEngine  # noqa: PLC0415
+        from core.legacy_adapters.live_market import LiveMarketEngine  # noqa: PLC0415
     except Exception as exc:
         return DisabledLiveEngine(reason=str(exc))
     return LiveMarketEngine()

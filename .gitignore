@@ -106,3 +106,5 @@ frontend/playwright-report/
 .codex_backups/
 
 *.bak.*
+
+.env.local-live

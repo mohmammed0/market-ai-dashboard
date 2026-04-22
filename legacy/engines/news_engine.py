@@ -3,7 +3,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
-from news_intelligence import classify_news_item, headline_signature
+from legacy.engines.news_intelligence import classify_news_item, headline_signature
 
 
 POSITIVE_PHRASES = [

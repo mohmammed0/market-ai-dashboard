@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from analysis_engine import run_analysis as engine_run_analysis
+from core.legacy_adapters.analysis import run_analysis as engine_run_analysis
 from core.signal_intelligence import enhance_signal
 from backend.app.core.date_defaults import indicator_warmup_start_date_iso, recent_end_date_iso, recent_start_date_iso
 

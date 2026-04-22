@@ -1,138 +1,87 @@
 # Market AI Dashboard
 
-Production-minded autonomous trading platform for US equities.
+Modern broker-managed US equities trading platform with a strict legacy boundary.
 
-This repository contains the live trading stack currently deployed at `/opt/market-ai-dashboard`. It combines market/session intelligence, portfolio decisioning, broker-managed execution, diagnostics, model services, and a retained desktop/engine layer from the original project.
+## Operating Model
 
-## What The System Does
+The live product is the modern stack under `backend/`, `frontend/`, `core/`, and `scripts/`.
 
-The platform is designed to behave like an autonomous trading desk rather than a simple signal bot.
+It is designed to:
+- analyze and rank US equities
+- understand session state and pre-open readiness
+- make portfolio-level decisions through the portfolio brain
+- route execution through an external broker-managed account
+- expose diagnostics and explainability through `/brain` and `/diagnostics/auto-trading`
 
-It can:
-- analyze US equities across a ranked universe
-- understand market session state and pre-open readiness
-- combine classic, ranking, ML, DL, and Kronos signals
-- make portfolio-level decisions such as `OPEN_LONG`, `ADD_LONG`, `HOLD`, `REDUCE_LONG`, `EXIT_LONG`, `QUEUE_FOR_OPEN`, `WAIT_FOR_CONFIRMATION`, and `NO_ACTION`
-- route orders through an external broker-managed paper account
-- reconcile broker lifecycle states and expose them in diagnostics
-- surface explainability through `/brain` and `/diagnostics/auto-trading`
+## Architecture Boundary
 
-## Current Operating Model
+### Modern live system
+- `backend/`
+  FastAPI APIs, automation, execution orchestration, broker integration, diagnostics, readiness, and runtime settings.
+- `frontend/`
+  React operator UI.
+- `core/`
+  shared service layer and explicit adapters used by the modern stack.
+- `scripts/`
+  deployment and operational helpers for the modern stack.
 
-- Asset scope: US equities only
-- Core universe: top liquid large-cap names
-- Tactical sleeve: listed small caps with tighter constraints
-- Execution truth: external broker-managed account
-- Internal paper simulator: disabled for active execution truth
-- Scheduling model: delegated to the `automation` service
+### Legacy layer
+- `legacy/engines/`
+  legacy analysis, technical, ranking, backtest, news, ML, and live-market engines.
+- `legacy/ui/`
+  legacy desktop UI.
+- `legacy/support/`
+  legacy SQLite-era support modules and data helpers.
+- `legacy/scripts/`
+  old training, worker, optimizer, and maintenance scripts.
+
+The live product must not import legacy modules directly. Any legacy dependency used by the modern stack must pass through explicit adapters in `core/legacy_adapters/`.
 
 ## Live Stack
 
-The production compose stack runs these core services:
-- `backend`: FastAPI application and API surface
-- `frontend`: operator dashboard UI
-- `automation`: delegated scheduler and trading-cycle worker
-- `db`: PostgreSQL state store
-- `redis`: shared runtime/cache/state channel
-- `ollama`: local model runtime support
+Production services:
+- `backend`
+- `frontend`
+- `automation`
+- `db`
+- `redis`
+- `ollama`
 
-## Repository Layout
+Execution/account/order truth:
+- external broker API only
+- broker-managed paper/live distinction exists only at the broker environment layer
+- internal paper simulation is not an active execution path
 
-### Root engines retained from the original project
-- `analysis_engine.py`
-- `technical_engine.py`
-- `ranking_engine.py`
-- `backtest_engine.py`
-- `main_ui.py`
+## Important Modern Modules
 
-These are preserved because they still provide important analysis and desktop-era logic.
-
-### Core active application areas
-- `backend/`
-  - FastAPI app, broker integration, orchestration, diagnostics, runtime settings, and APIs
-- `frontend/`
-  - Vite/React trading desk UI
-- `core/`
-  - reusable wrappers around legacy engines and market data logic
-- `docs/`
-  - operational and reference docs
-- `scripts/`
-  - stack and deployment helper scripts
-
-## Important Backend Modules
-
-- `backend/app/main.py`
-  - API entrypoint and router registration
+- `backend/app/bootstrap/`
+  app factory, router registration, startup/runtime wiring, and HTTP middleware setup.
 - `backend/app/services/automation_hub.py`
-  - automated trading cycles, readiness, and orchestration control
+  trading-cycle orchestration and readiness flow.
 - `backend/app/services/portfolio_brain.py`
-  - autonomous trader judgment and portfolio-level decisioning
+  portfolio-level decision engine.
 - `backend/app/application/execution/service.py`
-  - execution path and broker submission state handling
+  broker submission and execution lifecycle logic.
 - `backend/app/services/market_session_intelligence.py`
-  - normalized market session model
-- `backend/app/services/market_readiness.py`
-  - readiness artifact assembly
+  normalized session model.
 - `backend/app/services/analysis_engines.py`
-  - engine readiness and contribution visibility
+  engine status and contribution visibility.
 - `backend/app/services/kronos_intelligence.py`
-  - Kronos runtime, cache, and signal normalization
+  Kronos cache/runtime layer.
 - `backend/app/services/auto_trading_diagnostics.py`
-  - cycle artifacts, explainability, summaries, and row-level diagnostics
+  cycle artifacts and explainability.
 
-## Main UI Pages
+## Adapter Boundary
 
-Defined through `frontend/src/App.jsx`, including:
-- `/brain`
-- `/diagnostics/auto-trading`
-- `/broker`
-- `/settings`
-- `/live-market`
-- `/ai-news`
-- `/ranking`
+Modern code reaches legacy logic only through:
+- `core/legacy_adapters/analysis.py`
+- `core/legacy_adapters/technical.py`
+- `core/legacy_adapters/ranking.py`
+- `core/legacy_adapters/backtest.py`
+- `core/legacy_adapters/news.py`
+- `core/legacy_adapters/live_market.py`
 
-## Broker Model
-
-The platform no longer treats an internal simulated paper engine as active truth.
-
-Current truth model:
-- broker account source: external broker API
-- position source: broker
-- order source: broker
-- execution source: broker-managed
-- environment distinction: external paper vs external live
-
-This keeps trading logic consistent between paper and live at the broker layer.
-
-## Development Notes
-
-- Preserve the root engines unless there is a strong reason to change them.
-- Prefer focused patches over rewrites.
-- Keep diagnostics truthful.
-- Keep broker-managed execution as the single active execution/account truth path.
-- Do not reintroduce an internal paper trading engine.
-
-## Typical Production Commands
-
-### Backend
-```bash
-cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-### Frontend
-```bash
-cd frontend
-npm run build
-npm run preview:host
-```
-
-### Production compose
-```bash
-docker compose --env-file .env.production -f docker-compose.yml up -d
-```
-
-## Key Operational Endpoints
+## Key Endpoints
 
 - `/health`
 - `/ready`
@@ -143,14 +92,12 @@ docker compose --env-file .env.production -f docker-compose.yml up -d
 - `/api/analysis-engines/status`
 - `/api/kronos/status`
 - `/api/broker/status`
+- `/api/trading/portfolio`
 
-## Repository Cleanup Policy
+## Development Rules
 
-Temporary server-side backup artifacts are intentionally not tracked.
-
-Examples:
-- `.backup/`
-- `.codex_backups/`
-- `*.bak.*`
-
-These should stay out of Git unless there is a very specific operational reason to preserve them elsewhere.
+- Preserve broker-managed execution as the single source of execution truth.
+- Do not reintroduce internal paper trading.
+- Do not let modern modules import `legacy/` directly except through adapters.
+- Prefer modular patches over rewrites.
+- Keep diagnostics truthful.

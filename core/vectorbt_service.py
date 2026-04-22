@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from backtest_engine import _load_source_data, backtest_symbol_enhanced
+from core.legacy_adapters.backtest import _load_source_data, backtest_symbol_enhanced
 
 try:
     import vectorbt as vbt

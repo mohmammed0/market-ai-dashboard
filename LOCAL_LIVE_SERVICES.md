@@ -9,7 +9,7 @@ How to run the full live stack locally for development and proving.
 docker compose -f docker-compose.services.yml up -d
 
 # 2. Activate live environment
-copy .env.local-live .env
+copy .env.local-live.example .env
 
 # 3. Start the backend
 .\venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000

@@ -4,8 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
 
-from backtest_engine import backtest_symbol_enhanced
-from ranking_engine import _confidence_score
+from core.legacy_adapters.backtest import backtest_symbol_enhanced
+from core.legacy_adapters.ranking import confidence_score
 
 from backend.app.config import (
     CONFIDENCE_CALIBRATION_CACHE_TTL_SECONDS,
@@ -227,7 +227,7 @@ def _compute_profile(symbols: list[str], start_date: str, end_date: str) -> dict
             signal = str(event.get("enhanced_signal") or "").upper().strip()
             if signal not in {"BUY", "SELL"}:
                 continue
-            predicted_confidence = _clamp_confidence(_confidence_score(event))
+            predicted_confidence = _clamp_confidence(confidence_score(event))
             action = _derive_event_action(signal, predicted_confidence)
             samples.append(
                 {

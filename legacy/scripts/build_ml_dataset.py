@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 
-from technical_engine import calculate_technical_indicators
+from legacy.engines.technical_engine import calculate_technical_indicators
 
 SOURCE_DIR = Path("us_watchlist_source")
 OUTPUT_FILE = Path("ml_training_data.csv")

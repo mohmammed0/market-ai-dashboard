@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from live_market_engine import LiveMarketEngine
-from app_logger import get_logger
-from ranking_engine import (
+from legacy.engines.live_market_engine import LiveMarketEngine
+from legacy.support.app_logger import get_logger
+from legacy.engines.ranking_engine import (
     rank_analysis_result,
     build_ranked_scan_rows,
     summarize_top_candidates_by_signal,
@@ -635,8 +635,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from db import init_db
-            from db_ops import save_live_quote
+            from legacy.support.db import init_db
+            from legacy.support.db_ops import save_live_quote
             init_db()
             save_live_quote(quote)
             self.live_db_last_saved[symbol] = now_ts
@@ -943,7 +943,7 @@ class MainWindow(QMainWindow):
 
 
         try:
-            import analysis_engine
+            from legacy.engines import analysis_engine
             importlib.reload(analysis_engine)
 
             symbol = self.symbol_input.text().strip()
@@ -987,8 +987,8 @@ class MainWindow(QMainWindow):
                 self.fill_news_list(news_items)
 
                 try:
-                    from db import init_db
-                    from db_ops import save_analysis_result, save_news_items
+                    from legacy.support.db import init_db
+                    from legacy.support.db_ops import save_analysis_result, save_news_items
                     init_db()
                     save_analysis_result(result)
                     save_news_items(result.get("instrument"), news_items)
@@ -1008,7 +1008,7 @@ class MainWindow(QMainWindow):
         self.save_scan_button.setEnabled(False)
 
         try:
-            import analysis_engine
+            from legacy.engines import analysis_engine
             importlib.reload(analysis_engine)
 
             start_date = self.start_input.text().strip()
@@ -1033,8 +1033,8 @@ class MainWindow(QMainWindow):
                     if "error" not in result:
                         result = rank_analysis_result(result)
                         try:
-                            from db import init_db
-                            from db_ops import save_analysis_result, save_news_items
+                            from legacy.support.db import init_db
+                            from legacy.support.db_ops import save_analysis_result, save_news_items
                             init_db()
                             save_analysis_result(result)
                             save_news_items(result.get("instrument"), result.get("news_items", []))
@@ -1116,7 +1116,7 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
-    from db import init_db
+    from legacy.support.db import init_db
     init_db()
 
     app = QApplication(sys.argv)
